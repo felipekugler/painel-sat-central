@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Painel SAT Central{% endblock %}</title>
+
+    <!-- Tailwind + DaisyUI via CDN -->
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.23/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+
+    <style>
+        /* Tema Fluent (Windows 11) — harmonizado com os demais painéis da DPU */
+        :root {
+            --accent: #005FB8; --accent-hover: #1a6fc0; --accent-fg: #ffffff; --accent-soft: rgba(0, 95, 184, 0.12);
+            --bg: #f3f3f3; --card: #ffffff; --card-hover: #fafafa;
+            --stroke: rgba(0, 0, 0, 0.07); --stroke-strong: rgba(0, 0, 0, 0.12);
+            --text: #1a1a1a; --text-secondary: rgba(0, 0, 0, 0.62); --text-tertiary: rgba(0, 0, 0, 0.40);
+            --p: #005FB8 !important; --pf: #ffffff !important; --pc: #ffffff !important;
+            --s: #005FB8 !important; --sf: #ffffff !important; --sc: #ffffff !important;
+            --a: #005FB8 !important; --af: #ffffff !important; --ac: #ffffff !important;
+        }
+        :root[data-theme="dark"] {
+            --accent: #4cc2ff; --accent-hover: #63cbff; --accent-fg: #003354; --accent-soft: rgba(76, 194, 255, 0.14);
+            --bg: #1f1f1f; --card: #2b2b2b; --card-hover: #313131;
+            --stroke: rgba(255, 255, 255, 0.07); --stroke-strong: rgba(255, 255, 255, 0.12);
+            --text: #ffffff; --text-secondary: rgba(255, 255, 255, 0.74); --text-tertiary: rgba(255, 255, 255, 0.45);
+            --p: #4cc2ff !important; --pf: #003354 !important; --pc: #003354 !important;
+            --s: #4cc2ff !important; --sf: #003354 !important; --sc: #003354 !important;
+            --a: #4cc2ff !important; --af: #003354 !important; --ac: #003354 !important;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]):not([data-theme="dark"]) {
+                --accent: #4cc2ff; --accent-hover: #63cbff; --accent-fg: #003354; --accent-soft: rgba(76, 194, 255, 0.14);
+                --bg: #1f1f1f; --card: #2b2b2b; --card-hover: #313131;
+                --stroke: rgba(255, 255, 255, 0.07); --stroke-strong: rgba(255, 255, 255, 0.12);
+                --text: #ffffff; --text-secondary: rgba(255, 255, 255, 0.74); --text-tertiary: rgba(255, 255, 255, 0.45);
+                --p: #4cc2ff !important; --pf: #003354 !important; --pc: #003354 !important;
+                --s: #4cc2ff !important; --sf: #003354 !important; --sc: #003354 !important;
+                --a: #4cc2ff !important; --af: #003354 !important; --ac: #003354 !important;
+            }
+        }
+        .btn-primary { background-color: #005FB8 !important; border-color: #005FB8 !important; color: #ffffff !important; }
+        .btn-primary:hover, .btn-primary:focus { background-color: #1a6fc0 !important; border-color: #1a6fc0 !important; }
+        :root[data-theme="dark"] .btn-primary { background-color: #4cc2ff !important; border-color: #4cc2ff !important; color: #003354 !important; }
+        :root[data-theme="dark"] .btn-primary:hover, :root[data-theme="dark"] .btn-primary:focus { background-color: #63cbff !important; border-color: #63cbff !important; }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]):not([data-theme="dark"]) .btn-primary { background-color: #4cc2ff !important; border-color: #4cc2ff !important; color: #003354 !important; }
+        }
+
+        .nav-item {
+            display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 6px;
+            color: var(--text); text-decoration: none; font-weight: 500; font-size: 14px;
+            transition: background 0.12s ease;
+        }
+        .nav-item:hover { background: rgba(0, 0, 0, 0.04); }
+        .nav-item.active { background: rgba(0, 0, 0, 0.06); color: var(--accent); }
+        :root[data-theme="dark"] .nav-item:hover { background: rgba(255, 255, 255, 0.08); }
+        :root[data-theme="dark"] .nav-item.active { background: rgba(255, 255, 255, 0.10); color: var(--accent); }
+
+        .sys-selo {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 3px 6px 3px 11px; border-radius: 999px;
+            font-size: 11.5px; font-weight: 600; white-space: nowrap; border: 1px solid transparent;
+        }
+        .sys-selo .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+        .sys-selo.sys-on   { color: #1a7f4b; background: rgba(31,157,85,0.14); }
+        .sys-selo.sys-on   .dot { background: #1f9d55; }
+        .sys-selo.sys-off  { color: var(--text-secondary); background: rgba(120,120,120,0.12); }
+        .sys-selo.sys-off  .dot { background: var(--text-tertiary); }
+        .sys-selo.sys-warn { color: #8a5a00; background: rgba(201,138,0,0.16); border-color: #d9a441; }
+        .sys-selo.sys-warn .dot { background: #d9a441; }
+        :root[data-theme="dark"] .sys-selo.sys-on { color: #4ade80; }
+        :root[data-theme="dark"] .sys-selo.sys-warn { color: #e8b75a; }
+        .sys-recon {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 20px; height: 20px; border-radius: 999px; border: none; background: transparent;
+            color: inherit; cursor: pointer; opacity: 0.7; transition: background 0.12s ease, opacity 0.12s ease;
+        }
+        .sys-recon:hover { opacity: 1; background: rgba(0,0,0,0.08); }
+        :root[data-theme="dark"] .sys-recon:hover { background: rgba(255,255,255,0.14); }
+        .sys-recon svg { width: 13px; height: 13px; }
+        .sys-recon.girando svg { animation: sys-spin 0.8s linear infinite; }
+        @keyframes sys-spin { to { transform: rotate(360deg); } }
+
+        #btn-encerrar-painel {
+            display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 6px;
+            font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+            border: 1px solid rgba(196, 43, 28, 0.3); background: rgba(196, 43, 28, 0.12);
+            color: #c42b1c; cursor: pointer; transition: all 0.2s ease; white-space: nowrap;
+        }
+        #btn-encerrar-painel:hover:not(:disabled) { background: rgba(196, 43, 28, 0.18); }
+        :root[data-theme="dark"] #btn-encerrar-painel { border-color: rgba(255, 107, 107, 0.3); background: rgba(255, 107, 107, 0.14); color: #ff6b6b; }
+
+        .toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.5rem; }
+        [x-cloak] { display: none !important; }
+    </style>
+
+    {% block head %}{% endblock %}
+
+    <script>
+        (function () {
+            let t = localStorage.getItem('painel-tema') || 'system';
+            if (t !== 'system') document.documentElement.setAttribute('data-theme', t);
+        })();
+    </script>
+</head>
+<body class="bg-base-300 text-base-content min-h-screen flex flex-col">
+
+    <header class="border-b border-base-300" style="background: var(--card);">
+        <div class="max-w-6xl mx-auto px-6 py-3 flex items-center gap-4 flex-wrap">
+            <div class="flex items-center gap-2.5">
+                <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0"
+                      style="background: var(--accent); color: var(--accent-fg);">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.66V18a2.25 2.25 0 0 0 2.25 2.25h3.75a2.25 2.25 0 0 0 2.25-2.25V2.716m-3.75 0V3c0 .414-.336.75-.75.75H6.75C6.336 3 6 3.336 6 3.75V18a2.25 2.25 0 0 0 2.25 2.25h3.75a2.25 2.25 0 0 0 2.25-2.25" />
+                    </svg>
+                </span>
+                <span class="font-bold text-base" style="color: var(--text);">Painel SAT Central</span>
+            </div>
+
+            <nav class="flex items-center gap-1">
+                <a href="/" class="nav-item {% if request.url.path == '/' %}active{% endif %}">Início</a>
+                <a href="/configuracoes" class="nav-item {% if request.url.path == '/configuracoes' %}active{% endif %}">Configurações</a>
+            </nav>
+
+            <div class="ml-auto flex items-center gap-3">
+                {% set _recon_svg %}<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>{% endset %}
+                <span class="sys-selo sys-off" id="selo-sisdpu" title="Verificando conexão com o SISDPU…">
+                    <span class="dot"></span><span class="txt">SISDPU</span>
+                    <button type="button" class="sys-recon" onclick="reconectarSistema('sisdpu', event)"
+                            title="Reconectar a sessão do SISDPU (recupera de conflito / sessão derrubada por outro login).">
+                        {{ _recon_svg }}
+                    </button>
+                </span>
+                <span class="sys-selo sys-off" id="selo-sat" title="Verificando sessão do SAT…">
+                    <span class="dot"></span><span class="txt">SAT</span>
+                    <button type="button" class="sys-recon" onclick="reconectarSistema('sat', event)"
+                            title="Abrir a janela do SAT (login/CAPTCHA/2FA são feitos por você na janela).">
+                        {{ _recon_svg }}
+                    </button>
+                </span>
+                <button type="button" id="btn-encerrar-painel" onclick="encerrarPainel()"
+                        title="Encerrar o painel: desliga o servidor. Os dados já salvos permanecem em disco.">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9" style="width:14px;height:14px;">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 5.636a9 9 0 1 0 12.728 0M12 3v9" />
+                    </svg>
+                    Encerrar painel
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 w-full">
+        <div class="max-w-6xl mx-auto p-6">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Modal de desbloqueio do cofre (sob demanda) -->
+    <dialog id="cofre-modal" class="modal">
+        <div class="modal-box max-w-sm">
+            <h3 class="font-bold text-lg mb-1">Desbloquear cofre de credenciais</h3>
+            <p class="text-xs text-base-content/60 mb-3">
+                Digite a senha-mestra para liberar o acesso ao SISDPU nesta sessão. Ela vale
+                só até o painel reiniciar.
+            </p>
+            <form onsubmit="event.preventDefault(); cofreModalConfirmar();" class="flex flex-col gap-3">
+                <input type="password" id="cofre-modal-senha" class="input input-bordered input-sm"
+                       placeholder="senha-mestra" autocomplete="current-password" />
+                <div id="cofre-modal-erro" class="alert alert-error py-2 text-xs" style="display:none;"></div>
+                <div class="modal-action mt-1">
+                    <button type="button" class="btn btn-sm btn-ghost" onclick="cofreModalCancelar()">Cancelar</button>
+                    <button type="submit" class="btn btn-sm btn-primary">Desbloquear</button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button onclick="cofreModalCancelar()">fechar</button></form>
+    </dialog>
+
+    <script src="/static/js/app.js?v={{ app_version }}"></script>
+    {% block scripts %}{% endblock %}
+
+    <script>
+        function _setSelo(sys, estado, texto, dica) {
+            var el = document.getElementById('selo-' + sys); if (!el) return;
+            el.className = 'sys-selo sys-' + estado;
+            var txt = el.querySelector('.txt'); if (txt) txt.textContent = texto;
+            el.title = dica || '';
+        }
+        // Estado do cofre (compartilhado) — usado para saber se precisa desbloquear.
+        window._cofreStatus = { configurado: false, destrancado: false, sistemas: {} };
+
+        async function _lerCofre() {
+            try {
+                var st = await (await fetch('/api/cofre/status')).json();
+                if (st && st.ok) window._cofreStatus = st;
+            } catch (e) {}
+            return window._cofreStatus;
+        }
+
+        async function _atualizarSeloSisdpu() {
+            try {
+                var st = await (await fetch('/api/seguranca/status')).json();
+                if (!st || !st.ok) return;
+                if (st.conflito) {
+                    _setSelo('sisdpu', 'warn', 'SISDPU · conflito',
+                             st.conflito_detalhe || 'Conflito de sessão do SISDPU. Clique em reconectar.');
+                } else if (st.bloqueado) {
+                    _setSelo('sisdpu', 'off', 'SISDPU · bloqueado',
+                             'Cofre bloqueado — desbloqueie com a senha-mestra para acessar o SISDPU.');
+                } else if (st.conectado) {
+                    _setSelo('sisdpu', 'on', 'SISDPU', 'Conectado ao SISDPU.');
+                } else if (st.erro) {
+                    _setSelo('sisdpu', 'off', 'SISDPU · erro', st.erro);
+                } else if (st.configurado) {
+                    _setSelo('sisdpu', 'off', 'SISDPU',
+                             'Credenciais prontas. Adicione um PAJ ou clique em reconectar para conectar.');
+                } else {
+                    _setSelo('sisdpu', 'off', 'SISDPU · sem credenciais',
+                             'Cadastre as credenciais do SISDPU no cofre (Configurações).');
+                }
+            } catch (e) {}
+        }
+
+        // Garante o cofre desbloqueado: se está configurado e trancado, abre o
+        // modal de senha-mestra. Retorna Promise<bool> (true = pode prosseguir).
+        window.garantirCofre = async function () {
+            var st = await _lerCofre();
+            if (!st.configurado || st.destrancado) return true;  // nada a desbloquear
+            return await window.abrirModalCofre();
+        };
+        async function atualizarSeloSat() {
+            try {
+                var st = await (await fetch('/api/sat/sessao-leve')).json();
+                if (st && st.logado) _setSelo('sat', 'on', 'SAT', 'Sessão ativa. Clique para trazer a janela.');
+                else _setSelo('sat', 'off', 'SAT', (st && st.msg) || 'Janela fechada / não conectado.');
+            } catch (e) {
+                _setSelo('sat', 'off', 'SAT', 'Não foi possível verificar a sessão.');
+            }
+        }
+        window.atualizarSelos = async function () {
+            await _lerCofre();
+            _atualizarSeloSisdpu();
+            atualizarSeloSat();
+        };
+        window.reconectarSistema = async function (sys, ev) {
+            var btn = ev && ev.currentTarget ? ev.currentTarget : null;
+            if (btn) btn.classList.add('girando');
+            try {
+                if (sys === 'sisdpu') {
+                    if (!(await window.garantirCofre())) return;
+                    var r = await (await fetch('/api/seguranca/reconectar', { method: 'POST' })).json();
+                    showToast(r.ok ? 'SISDPU reconectado.' : ('Falha ao reconectar: ' + (r.detalhe || '')),
+                              r.ok ? 'success' : 'error');
+                } else if (sys === 'sat') {
+                    var r2 = await (await fetch('/api/sat/abrir')).json();
+                    showToast(r2.logado ? 'SAT conectado.' : 'Janela do SAT aberta — faça o login.', r2.logado ? 'success' : 'info');
+                }
+            } catch (e) {
+                showToast('Erro: ' + e, 'error');
+            } finally {
+                if (btn) btn.classList.remove('girando');
+                window.atualizarSelos();
+            }
+        };
+
+        // ── Modal de desbloqueio do cofre (sob demanda) ────────────────────
+        window._cofreResolve = null;
+        window.abrirModalCofre = function () {
+            var dlg = document.getElementById('cofre-modal'); if (!dlg) return Promise.resolve(false);
+            document.getElementById('cofre-modal-erro').style.display = 'none';
+            var inp = document.getElementById('cofre-modal-senha'); inp.value = '';
+            if (typeof dlg.showModal === 'function') dlg.showModal();
+            setTimeout(function () { inp.focus(); }, 50);
+            return new Promise(function (resolve) { window._cofreResolve = resolve; });
+        };
+        window.cofreModalConfirmar = async function () {
+            var inp = document.getElementById('cofre-modal-senha');
+            var errEl = document.getElementById('cofre-modal-erro');
+            var senha = inp.value || '';
+            if (!senha) { errEl.textContent = 'Informe a senha-mestra.'; errEl.style.display = 'block'; return; }
+            try {
+                var r = await fetch('/api/cofre/desbloquear', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ senha_mestra: senha })
+                });
+                var d = await r.json().catch(function () { return {}; });
+                if (!r.ok || !d.ok) {
+                    errEl.textContent = d.erro || 'Senha-mestra incorreta.'; errEl.style.display = 'block'; return;
+                }
+                document.getElementById('cofre-modal').close();
+                if (window._cofreResolve) { window._cofreResolve(true); window._cofreResolve = null; }
+                window.atualizarSelos();
+            } catch (e) {
+                errEl.textContent = 'Falha de rede.'; errEl.style.display = 'block';
+            }
+        };
+        window.cofreModalCancelar = function () {
+            document.getElementById('cofre-modal').close();
+            if (window._cofreResolve) { window._cofreResolve(false); window._cofreResolve = null; }
+        };
+        window.encerrarPainel = async function () {
+            if (!confirm('Encerrar o painel?\n\nIsso vai desligar o servidor. Os dados já salvos '
+                       + 'permanecem em disco.\n\nPara usar de novo, abra o Painel SAT Central pelo atalho.')) return;
+            var btn = document.getElementById('btn-encerrar-painel');
+            if (btn) { btn.disabled = true; btn.textContent = 'Encerrando…'; }
+            try { await fetch('/api/encerrar', { method: 'POST' }); } catch (e) { /* esperado */ }
+            var html = '<!doctype html><html lang="pt-br"><head><meta charset="utf-8">'
+                + '<title>Painel encerrado</title><meta name="viewport" content="width=device-width, initial-scale=1">'
+                + '<style>:root{color-scheme:light dark;}body{font-family:"Segoe UI",system-ui,-apple-system,sans-serif;'
+                + 'margin:0;height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;'
+                + 'background:#f6f9f8;color:#16211f;}@media (prefers-color-scheme: dark){body{background:#0f1513;color:#e6efec;}}'
+                + '.card{max-width:440px;padding:32px 28px;}h1{font-size:21px;margin:0 0 10px;font-weight:600;}'
+                + '.sub{color:#5b6b68;font-size:14px;line-height:1.6;margin:0;}</style></head>'
+                + '<body><div class="card"><h1>Painel encerrado</h1>'
+                + '<p class="sub">O servidor foi desligado.<br>Você já pode fechar esta aba.<br><br>'
+                + 'Para usar novamente, abra o <strong>Painel SAT Central</strong> pelo atalho de sempre.</p>'
+                + '</div></body></html>';
+            document.open(); document.write(html); document.close();
+        };
+        window.atualizarSelos();
+        setInterval(window.atualizarSelos, 15000);
+    </script>
+</body>
+</html>

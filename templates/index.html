@@ -1,0 +1,1158 @@
+{% extends "base.html" %}
+{% block title %}Arquivos SAT Central{% endblock %}
+
+{% block content %}
+<div x-data="satPage()" x-init="init()">
+
+    <div class="flex items-center justify-between mb-2">
+        <h2 class="text-2xl font-bold">
+            Arquivos SAT Central
+            <span class="text-base-content/50 text-lg" x-show="!carregando" x-text="'(' + pendentes.length + ')'"></span>
+        </h2>
+    </div>
+
+    <div class="text-sm text-base-content/60 mb-4">
+        <div>Esta aplicação permite:</div>
+        <ul class="list-disc ml-6 mt-1 space-y-0.5">
+            <li>Incluir PAJs manualmente (por número) para buscar os documentos do SAT Central.</li>
+            <li>Baixar os documentos, visualizar a lista, excluir arquivos desnecessários. É possível ajustar
+                o que baixar em cada tipo de pretensão. Acesse as configurações para ajustar parâmetros.</li>
+            <li>Anexar os arquivos ao PAJ com movimentação e tramitação (opcional)</li>
+            <li class="mt-2">Ao clicar no botão "Baixar Arquivos" será necessário fazer login no SAT e resolver
+                o CAPTCHA "Não sou um robô" para cada CPF a ser consultado.</li>
+        </ul>
+    </div>
+
+    <!-- Sessão SAT -->
+    <div class="card bg-base-200 shadow mb-4">
+        <div class="card-body py-3 flex-row items-center gap-3 flex-wrap">
+            <span class="text-sm font-medium">Sessão SAT:</span>
+            <span class="badge" :class="sessaoOk ? 'badge-success' : 'badge-warning'"
+                  x-text="sessaoOk ? 'Conectado' : 'Não conectado'"></span>
+            <button class="btn btn-sm btn-primary" @click="abrirSat()" :disabled="sessaoBusy">
+                <span x-show="sessaoBusy" class="loading loading-spinner loading-xs"></span>
+                Abrir SAT / Login
+            </button>
+            <button class="btn btn-sm btn-ghost" @click="verificarSessao()" :disabled="sessaoBusy">Verificar sessão</button>
+            <span class="text-xs text-base-content/60" x-text="sessaoMsg"></span>
+        </div>
+    </div>
+
+    <!-- O que baixar -->
+    <div class="card bg-base-200 shadow mb-4">
+        <div class="card-body py-3">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-medium mr-1">O que baixar:</span>
+                <button class="btn btn-xs btn-outline" @click="abrirTipos()">Escolher documentos</button>
+                <button class="btn btn-xs btn-outline" @click="abrirPatIgnorar()"
+                        title="Espécies de processo administrativo (PAT) que não devem ser baixadas">Ignorar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tramitar para + Prazo -->
+    <div class="card bg-base-200 shadow mb-4">
+        <div class="card-body py-3">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-medium mr-1">Tramitar para:</span>
+                <button class="btn btn-xs" :class="grupoSel===padrao ? 'btn-primary' : 'btn-outline'"
+                        @click="grupoSel=padrao" x-text="padrao"></button>
+                <button class="btn btn-xs btn-ghost" @click="carregarGrupos()" :disabled="carregandoGrupos">
+                    <span x-show="carregandoGrupos" class="loading loading-spinner loading-xs"></span>
+                    outra caixa…
+                </button>
+                <select x-show="grupos.length" class="select select-bordered select-xs" x-model="grupoSel">
+                    <template x-for="g in grupos" :key="g"><option :value="g" x-text="g"></option></template>
+                </select>
+                <span class="mx-2 text-base-content/30">|</span>
+                <span class="text-sm font-medium mr-1">Prazo:</span>
+                <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input type="radio" class="sat-radio" :checked="!comPrazo" @change="comPrazo=false">
+                    sem prazo
+                </label>
+                <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input type="radio" class="sat-radio" :checked="comPrazo" @change="comPrazo=true">
+                    em
+                    <input type="number" min="1" max="365" class="input input-bordered input-xs w-16"
+                           x-model.number="prazoDias" @focus="comPrazo=true">
+                    dias
+                </label>
+                <span class="text-xs text-base-content/50" x-show="comPrazo" x-text="'(conclui até ' + dataPrazo() + ')'"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- PAJs cadastrados -->
+    <div class="card bg-base-200 shadow mb-6">
+        <div class="card-body p-0">
+            <div class="flex items-center justify-between px-4 pt-3 gap-2 flex-wrap">
+                <h3 class="font-semibold text-base-content/80">PAJs cadastrados</h3>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <div class="flex items-center gap-1">
+                        <input type="text" class="input input-bordered input-sm w-44"
+                               placeholder="AAAA/UUU-NNNNN" x-model="manualPaj"
+                               @keydown.enter="adicionarManual()" :disabled="addingManual">
+                        <button class="btn btn-sm btn-primary" @click="adicionarManual()"
+                                :disabled="addingManual || !manualPaj.trim()"
+                                title="Adiciona um PAJ à lista extraindo os dados do SISDPU (busca global por número)">
+                            <span x-show="addingManual" class="loading loading-spinner loading-xs"></span>
+                            Adicionar PAJ
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <p class="px-4 pt-1 text-sm" x-show="manualMsg"
+               :class="manualMsgErro ? 'text-error' : 'text-success'" x-text="manualMsg"></p>
+            <div class="overflow-x-auto">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>PAJ</th><th>Assistido</th><th>CPF</th><th>Pretensão</th><th>Documentos</th><th>Log</th><th class="text-right">Ação</th>
+                        </tr>
+                    </thead>
+                    <template x-for="p in pendentes" :key="p.paj_norm">
+                        <tbody>
+                            <tr class="hover">
+                                <td class="font-mono whitespace-nowrap">
+                                    <a x-show="p.url_detalhe" :href="p.url_detalhe" target="_blank" rel="noopener"
+                                       class="link link-hover" style="color:var(--accent)"
+                                       title="Abrir o PAJ no SISDPU (conferir a anexação)" x-text="p.paj"></a>
+                                    <span x-show="!p.url_detalhe" x-text="p.paj"></span>
+                                    <button class="btn btn-ghost btn-xs text-error px-1" :disabled="rodando"
+                                            @click="removerManual(p)" title="Remover este PAJ da lista">✕</button>
+                                </td>
+                                <td x-text="p.assistido"></td>
+                                <td class="font-mono whitespace-nowrap">
+                                    <span x-text="p.cpf || '—'"></span>
+                                    <button class="btn btn-ghost btn-xs" x-show="p.cpf" @click="copiar(p.cpf)" title="Copiar CPF">⧉</button>
+                                </td>
+                                <td class="text-sm">
+                                    <button x-show="p.pretensao" class="link link-hover text-left"
+                                            style="color:var(--accent)" @click="toggleNarrativa(p)"
+                                            :title="narrativaAberta[p.paj_norm] ? 'Ocultar narrativa' : 'Ver narrativa do PAJ'">
+                                        <span x-text="p.pretensao"></span>
+                                        <span x-text="narrativaAberta[p.paj_norm] ? '▲' : '▼'"></span>
+                                    </button>
+                                    <span x-show="!p.pretensao" class="text-base-content/40">—</span>
+                                </td>
+                                <td>
+                                    <div class="inline-flex items-center gap-1.5">
+                                        <span x-show="p.n_arquivos > 0"
+                                              class="badge badge-success badge-sm gap-1 whitespace-nowrap cursor-pointer"
+                                              @click="toggleDocs(p)"
+                                              :title="docsAbertos[p.paj_norm] ? 'Ocultar documentos' : 'Ver documentos baixados'">
+                                            <span x-text="p.n_arquivos + ' arquivo(s)'"></span>
+                                            <span class="text-[10px]" x-text="docsAbertos[p.paj_norm] ? '▲' : '▼'"></span>
+                                        </span>
+                                        <span x-show="p.n_arquivos === 0" class="badge badge-ghost badge-sm whitespace-nowrap">Aguardando download</span>
+                                        <!-- ponto vermelho: houve falha no download (clique abre o log) -->
+                                        <span x-show="p.tem_falha" class="sat-falha-dot" @click.stop="verLogDownload(p)"
+                                              title="Houve falha no último download — clique para ver o log"></span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <button x-show="p.tem_log || logsDownload[p.paj_norm]" class="btn btn-ghost btn-xs"
+                                            @click="verLogDownload(p)" title="Ver log do último download">📄</button>
+                                    <span x-show="!(p.tem_log || logsDownload[p.paj_norm])" class="text-base-content/30">—</span>
+                                </td>
+                                <td class="text-right whitespace-nowrap">
+                                    <button class="btn btn-sm btn-primary" :disabled="rodando || !p.cpf"
+                                            @click="p.n_arquivos > 0 ? abrirBaixarMais(p, 'pendente') : baixar(p)"
+                                            :title="!p.cpf ? 'Sem CPF do assistido' : (p.n_arquivos > 0 ? 'Baixar mais documentos do SAT (escolher o que baixar) — junta ao acervo pendente' : 'Baixar os documentos do SAT Central')">
+                                        <span x-text="p.n_arquivos > 0 ? 'Baixar mais' : 'Baixar arquivos'"></span>
+                                    </button>
+                                    <button x-show="ehDerivada(p.pretensao)" class="btn btn-sm btn-outline ml-1" :disabled="rodando"
+                                            @click="instAlvo=p; instCpf=''; instNome=''; instModal=true"
+                                            title="Pensão por morte / auxílio-reclusão: baixar documentos do instituidor (2ª consulta, CPF do instituidor)">
+                                        Docs do instituidor
+                                    </button>
+                                    <button x-show="p.n_instituidor > 0" class="btn btn-sm btn-outline ml-1" :disabled="rodando"
+                                            @click="anexarInstituidor(p)"
+                                            title="Anexar (só movimentação) os documentos do instituidor ao PAJ — registro separado">
+                                        Anexar instituidor (<span x-text="p.n_instituidor"></span>)
+                                    </button>
+                                    <button x-show="p.n_arquivos > 0" class="btn btn-sm btn-outline ml-1" :disabled="rodando"
+                                            @click="processar(p)"
+                                            title="Movimentar → tramitar no SISDPU (sem conclusão — PAJ manual)">Anexar ao PAJ</button>
+                                </td>
+                            </tr>
+                            <tr x-show="narrativaAberta[p.paj_norm]">
+                                <td class="bg-base-100"></td>
+                                <td colspan="6" class="bg-base-100">
+                                    <div class="nb-filtro-box flex items-center gap-2 mb-2 flex-wrap">
+                                        <span class="badge badge-nb">Filtrar por NB</span>
+                                        <input type="text" class="input input-bordered input-xs w-72"
+                                               placeholder="ex.: 726.015.826-4"
+                                               x-model="p.nbFiltro">
+                                        <span class="text-[11px] nb-filtro-hint">indique um ou mais benefícios, separados por vírgula</span>
+                                    </div>
+                                    <div class="text-[11px] leading-[1.6] whitespace-pre-wrap max-h-72 overflow-y-auto p-2 rounded bg-base-300">
+                                        <span x-show="narrativas[p.paj_norm] === undefined" class="loading loading-spinner loading-xs"></span>
+                                        <span x-text="narrativas[p.paj_norm] || ''"></span>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr x-show="docsAbertos[p.paj_norm]">
+                                <td class="bg-base-100"></td>
+                                <td colspan="6" class="bg-base-100">
+                                    <table class="table table-xs w-full sat-docs">
+                                        <thead><tr class="text-[11px] text-base-content/50">
+                                            <th>Documento</th><th class="w-20">Tamanho</th>
+                                            <th class="w-16 text-center">Excluir</th><th class="w-20 text-center">Recuperar</th></tr></thead>
+                                        <tbody>
+                                            <template x-for="a in (docsArquivos[p.paj_norm] || [])" :key="a.nome">
+                                                <tr class="hover" :class="a.excluido ? 'opacity-40' : ''">
+                                                    <td :class="a.excluido ? 'line-through' : ''">
+                                                        <a :href="`/api/sat/${encodeURIComponent(p.paj_norm)}/arquivo?nome=${encodeURIComponent(a.nome)}`"
+                                                           target="_blank" rel="noopener" class="link link-hover"
+                                                           style="color:var(--accent)" title="Abrir o PDF em nova aba"
+                                                           x-text="a.nome"></a>
+                                                    </td>
+                                                    <td class="whitespace-nowrap tabular-nums" :class="a.excluido ? 'line-through' : ''" x-text="fmtTam(a.tamanho)"></td>
+                                                    <td class="text-center"><button x-show="!a.excluido" class="btn btn-ghost btn-xs text-error px-1"
+                                                                @click="excluir(p, a.nome)" title="Remover da lista (não será anexado ao PAJ; pode recuperar)">✕</button></td>
+                                                    <td class="text-center"><button x-show="a.excluido" class="btn btn-ghost btn-xs px-1" style="color:var(--accent)"
+                                                                @click="recuperar(p, a.nome)" title="Recuperar (voltará a ser anexado)">↶</button></td>
+                                                </tr>
+                                            </template>
+                                            <tr x-show="(docsArquivos[p.paj_norm] || []).length === 0">
+                                                <td colspan="4" class="text-base-content/40">Nenhum documento na pasta.</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </template>
+                    <tbody>
+                        <tr x-show="!carregando && pendentes.length === 0">
+                            <td colspan="7" class="text-center text-base-content/40 py-6">
+                                Use <strong>Adicionar PAJ</strong> para incluir um PAJ (busca global no SISDPU por número).
+                            </td>
+                        </tr>
+                        <tr x-show="carregando">
+                            <td colspan="7" class="text-center py-6"><span class="loading loading-spinner"></span> Carregando…</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Histórico -->
+    <div class="card bg-base-200 shadow">
+        <div class="card-body p-0">
+            <h3 class="font-semibold text-base-content/80 px-4 pt-3">PAJs Trabalhados</h3>
+            <div class="overflow-x-auto">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Data</th><th>PAJ</th><th>Assistido</th><th>Movimentado</th>
+                            <th>Tramitado</th><th>Concluído</th><th class="text-center">Log</th>
+                            <th class="text-center">Baixar Mais</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="r in historico" :key="r.id">
+                            <tr class="hover">
+                                <td class="whitespace-nowrap text-xs" x-text="fmtDataHora(r.ts)"></td>
+                                <td class="font-mono whitespace-nowrap">
+                                    <a x-show="r.url_detalhe" :href="r.url_detalhe" target="_blank" rel="noopener"
+                                       class="link link-hover" style="color:var(--accent)"
+                                       title="Abrir o PAJ no SISDPU (conferir a anexação)" x-text="r.paj"></a>
+                                    <span x-show="!r.url_detalhe" x-text="r.paj"></span>
+                                </td>
+                                <td>
+                                    <span x-text="r.assistido"></span>
+                                    <span x-show="r.escopo==='instituidor'" class="badge badge-info badge-sm ml-1">Documentos do Instituidor</span>
+                                    <span x-show="r.escopo==='complementar'" class="badge badge-info badge-sm ml-1">Download complementar</span>
+                                    <span x-show="r.escopo==='exclusao_manual'" class="badge badge-error badge-sm ml-1">Exclusão manual</span>
+                                </td>
+                                <td><span class="badge badge-sm" :class="r.mov_status==='movimentado'?'badge-ocre':(r.mov_status==='nao_aplicavel'?'badge-ghost':'badge-error')"
+                                          x-text="r.mov_seq ? ('Mov ' + r.mov_seq) : (r.mov_status==='nao_aplicavel' ? 'N/A' : (r.mov_status||'—'))"></span></td>
+                                <td><span class="badge badge-sm"
+                                          :class="r.tram_status==='tramitado'?'badge-ocre':((r.tram_status==='ja_foi'||r.tram_status==='nao_aplicavel')?'badge-ghost':'badge-error')"
+                                          x-text="r.tram_status==='tramitado' ? r.tram_caixa : (r.tram_status==='ja_foi' ? 'já foi' : (r.tram_status==='nao_aplicavel' ? 'N/A' : (r.tram_status||'—')))"></span></td>
+                                <td><span class="badge badge-sm"
+                                          :class="r.concluido_status==='concluido'?'badge-ocre':((r.concluido_status==='ja_foi'||r.concluido_status==='nao_aplicavel')?'badge-ghost':'badge-error')"
+                                          :title="(r.concluido_status==='nao_aplicavel' && r.escopo!=='exclusao_manual') ? 'PAJ manual — sem trâmite na caixa para concluir' : ''"
+                                          x-text="r.concluido_status==='concluido' ? 'Sim' : (r.concluido_status==='ja_foi' ? 'já foi' : (r.concluido_status==='nao_aplicavel' ? 'N/A' : (r.concluido_status||'—')))"></span></td>
+                                <td class="text-center whitespace-nowrap">
+                                    <button class="btn btn-ghost btn-xs" @click="verLog(r)"
+                                            title="Log das etapas (movimentação/tramitação)">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2z" />
+                                        </svg>
+                                    </button>
+                                    <button class="btn btn-ghost btn-xs" style="color:var(--accent)"
+                                            @click="verLogDownload(r)" title="Log completo do download (SAT)">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2z" />
+                                        </svg>
+                                    </button>
+                                </td>
+                                <td class="text-center">
+                                    <button x-show="r.escopo!=='exclusao_manual'" class="btn btn-ghost btn-xs" :disabled="rodando" @click="abrirBaixarMais(r)"
+                                            title="Baixar mais documentos do SAT neste PAJ (download complementar)">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                                        </svg>
+                                    </button>
+                                    <span x-show="r.escopo==='exclusao_manual'" class="text-base-content/30">—</span>
+                                </td>
+                            </tr>
+                        </template>
+                        <tr x-show="historico.length === 0">
+                            <td colspan="8" class="text-center text-base-content/40 py-6">Nenhum PAJ trabalhado ainda.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de progresso (SSE) -->
+    <div class="modal" :class="{'modal-open': sseAberto}">
+        <div class="modal-box max-w-[50vw]">
+            <h3 class="font-bold text-lg mb-2">Processamento <span x-text="sseStatus"></span></h3>
+            <div class="bg-base-300 rounded p-3 text-[11px] leading-[1.65] font-mono h-[340px] overflow-y-auto">
+                <template x-for="(l, i) in sseLog" :key="i">
+                    <div :class="{
+                        'text-success': l.level==='ok', 'text-error': l.level==='erro',
+                        'text-base-content/50': l.level==='muted', 'text-info': l.level==='info',
+                        'text-primary font-semibold': l.level==='novo'}" x-text="l.msg"></div>
+                </template>
+            </div>
+            <div class="modal-action">
+                <button class="btn btn-error btn-outline" x-show="rodando && sseTipo==='download'"
+                        @click="cancelarDownload()">Cancelar download</button>
+                <button class="btn" @click="sseFechar()" :disabled="!sseFechavel">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: sessão do SAT não conectada -->
+    <div class="modal" :class="{'modal-open': naoLogadoModal}">
+        <div class="modal-box max-w-md">
+            <h3 class="font-bold text-lg mb-2">⚠ Sessão do SAT não conectada</h3>
+            <p class="text-sm text-base-content/70">
+                Para baixar os documentos é preciso estar <strong>logado no SAT Central</strong>.
+                Clique em <strong>Abrir SAT / Login</strong>, faça o login (usuário / senha / 2FA) e
+                resolva o <strong>CAPTCHA</strong> na janela que abrir. Depois, volte e clique em
+                <strong>Baixar arquivos</strong> novamente.
+            </p>
+            <div class="modal-action">
+                <button class="btn btn-primary btn-sm" @click="naoLogadoModal=false; abrirSat()"
+                        :disabled="sessaoBusy">
+                    <span x-show="sessaoBusy" class="loading loading-spinner loading-xs"></span>
+                    Abrir SAT / Login
+                </button>
+                <button class="btn btn-sm" @click="naoLogadoModal=false">Fechar</button>
+            </div>
+        </div>
+        <div class="modal-backdrop" @click="naoLogadoModal=false"></div>
+    </div>
+
+    <!-- Modal: CPF do instituidor (benefícios derivados) -->
+    <div class="modal" :class="{'modal-open': instModal}">
+        <div class="modal-box max-w-md">
+            <h3 class="font-bold text-lg mb-2">Documentos do instituidor</h3>
+            <p class="text-sm text-base-content/70 mb-3">
+                Em <strong>pensão por morte</strong> / <strong>auxílio-reclusão</strong>, a qualidade de
+                segurado se prova nos dados do <strong>instituidor</strong> (falecido/preso), que ficam sob o
+                CPF dele. Informe o CPF para uma 2ª consulta no SAT — você resolve o CAPTCHA na janela.
+            </p>
+            <label class="text-sm font-medium">CPF do instituidor</label>
+            <input type="text" class="input input-bordered input-sm w-full mb-2" x-model="instCpf"
+                   placeholder="000.000.000-00" @keydown.enter="baixarInstituidor()">
+            <label class="text-sm font-medium">Nome (opcional — entra no nome dos arquivos)</label>
+            <input type="text" class="input input-bordered input-sm w-full" x-model="instNome"
+                   placeholder="nome do instituidor">
+            <p class="text-[11px] text-base-content/50 mt-2">
+                Baixa a seleção de "Instituidor" (ajustável em "Escolher documentos"), com nomes prefixados
+                "INSTITUIDOR - ", na mesma pasta do PAJ. Sem filtro por espécie.
+            </p>
+            <div class="modal-action">
+                <button class="btn btn-primary btn-sm" :disabled="!instCpf" @click="baixarInstituidor()">Baixar docs do instituidor</button>
+                <button class="btn btn-sm" @click="instModal=false">Cancelar</button>
+            </div>
+        </div>
+        <div class="modal-backdrop" @click="instModal=false"></div>
+    </div>
+
+    <!-- Modal: Baixar Mais (download complementar) -->
+    <div class="modal" :class="{'modal-open': baixarMaisModal}">
+        <div class="modal-box max-w-[50vw]">
+            <h3 class="font-bold text-lg mb-1">Baixar mais documentos — <span class="font-mono" x-text="bmAlvo && bmAlvo.paj"></span></h3>
+            <p class="text-sm text-base-content/70 mb-3" x-show="bmModo === 'concluido'">
+                Nova consulta ao SAT para <strong x-text="bmAlvo && bmAlvo.assistido"></strong>. Os selecionados
+                serão baixados e anexados por uma <strong>nova movimentação</strong> (sem tramitar) —
+                registrado como "download complementar". Você resolve o CAPTCHA na janela.
+            </p>
+            <p class="text-sm text-base-content/70 mb-3" x-show="bmModo === 'pendente'">
+                Nova consulta ao SAT para <strong x-text="bmAlvo && bmAlvo.assistido"></strong>.
+                Selecione o que deseja baixar de forma complementar.
+            </p>
+            <div class="alert alert-warning py-2 text-xs mb-3" x-show="bmSemInventario">
+                <span>
+                    Não há inventário do 1º download (interrompido ou sem log). A lista abaixo mostra os
+                    <strong>tipos de documento</strong> — selecione os que faltam para baixar <strong>todos os
+                    subitens</strong> daquele tipo. Tipos já baixados serão re-baixados se marcados.
+                </span>
+            </div>
+            <div class="flex items-center gap-2 mb-2 flex-wrap">
+                <span class="text-sm font-medium">CPF:</span>
+                <input type="text" class="input input-bordered input-sm w-40" x-model="bmCpf" placeholder="000.000.000-00">
+                <span class="text-xs text-base-content/50 ml-auto" x-text="bmSel.length + ' selecionado(s)'"></span>
+            </div>
+            <div class="max-h-[340px] overflow-y-auto space-y-3 pr-1">
+                <div x-show="bmCarregando" class="text-sm text-base-content/50 py-4">
+                    <span class="loading loading-spinner loading-xs"></span> Lendo o inventário do 1º download…
+                </div>
+                <div x-show="!bmCarregando && bmLista.length===0" class="text-sm text-base-content/50 py-4">
+                    Nada a listar para este PAJ.
+                </div>
+                <template x-for="cl in bmLista" :key="cl.grupo">
+                    <div>
+                        <div class="text-xs font-semibold text-base-content/60 mb-1" x-text="cl.grupo"></div>
+                        <template x-for="(row, ri) in cl.rows" :key="cl.grupo + '#' + ri + '#' + row.alvo">
+                            <label class="flex items-center gap-2 text-sm py-0.5"
+                                   :class="row.ja_baixado ? 'opacity-60' : 'cursor-pointer'">
+                                <input type="checkbox" class="checkbox checkbox-sm" :value="row.alvo"
+                                       x-model="bmSel" :disabled="row.ja_baixado">
+                                <span x-text="row.label"></span>
+                                <span x-show="bmStatusTxt(row)" class="text-[11px]"
+                                      :class="row.ja_baixado ? 'text-success' : 'text-warning'"
+                                      x-text="'(' + bmStatusTxt(row) + ')'"></span>
+                            </label>
+                        </template>
+                    </div>
+                </template>
+            </div>
+            <div class="modal-action">
+                <button class="btn btn-primary btn-sm" :disabled="!bmCpf || bmSel.length===0" @click="baixarMais()"
+                        x-text="bmModo === 'pendente' ? 'Baixar e juntar ao acervo' : 'Baixar e anexar'"></button>
+                <button class="btn btn-sm" @click="baixarMaisModal=false">Cancelar</button>
+            </div>
+        </div>
+        <div class="modal-backdrop" @click="baixarMaisModal=false"></div>
+    </div>
+
+    <!-- Modal: escolher tipos de documentos por pretensão -->
+    <div class="modal" :class="{'modal-open': tiposModal}">
+        <div class="modal-box max-w-[50vw]">
+            <h3 class="font-bold text-lg mb-2">Tipos de documentos a baixar</h3>
+            <div class="flex items-center gap-2 mb-3 flex-wrap">
+                <span class="text-sm font-medium">Pretensão:</span>
+                <select class="select select-bordered select-sm" x-model="tiposPretSel" @change="onTiposPretChange()">
+                    <option value="__padrao__">Padrão (todas as outras)</option>
+                    <option value="__instituidor__">◆ Instituidor (pensão por morte / auxílio-reclusão)</option>
+                    <template x-for="pr in tiposPretensoes" :key="pr"><option :value="pr" x-text="pr"></option></template>
+                </select>
+                <span class="mx-1 text-base-content/30">|</span>
+                <button class="btn btn-xs btn-ghost" @click="tiposMarcarTodos(true)">Marcar todos</button>
+                <button class="btn btn-xs btn-ghost" @click="tiposMarcarTodos(false)">Limpar</button>
+                <span class="text-xs text-base-content/50 ml-auto" x-text="tiposSel.length + '/' + tiposCatalogo.length + ' marcados'"></span>
+            </div>
+            <div class="max-h-[340px] overflow-y-auto space-y-3 pr-1">
+                <template x-for="grupo in tiposGrupos()" :key="grupo">
+                    <div>
+                        <div class="text-xs font-semibold text-base-content/60 mb-1" x-text="grupo"></div>
+                        <template x-for="t in tiposDoGrupo(grupo)" :key="t.key">
+                            <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+                                <input type="checkbox" class="checkbox checkbox-sm" :value="t.key" x-model="tiposSel">
+                                <span x-text="t.label"></span>
+                            </label>
+                        </template>
+                    </div>
+                </template>
+            </div>
+            <div class="modal-action items-center">
+                <span class="text-xs text-success mr-auto" x-show="tiposMsg" x-text="tiposMsg"></span>
+                <button class="btn btn-primary btn-sm" @click="salvarTipos()">Salvar</button>
+                <button class="btn btn-sm" @click="tiposModal=false">Fechar</button>
+            </div>
+        </div>
+        <div class="modal-backdrop" @click="tiposModal=false"></div>
+    </div>
+
+    <!-- Modal: ignorar espécies de processo administrativo (PAT) -->
+    <div class="modal" :class="{'modal-open': patIgnorarModal}">
+        <div class="modal-box max-w-xl">
+            <h3 class="font-bold text-lg mb-1">Processos administrativos a ignorar</h3>
+            <p class="text-sm text-base-content/70 mb-3">
+                Espécies de processo administrativo (coluna <strong>Serviço</strong> do PAT) que
+                <strong>não devem ser baixadas</strong>. A comparação ignora acentos e maiúsculas
+                (casa por trecho). Vá cadastrando novas espécies conforme forem surgindo.
+            </p>
+            <div class="flex items-center gap-2 mb-2">
+                <input type="text" class="input input-bordered input-sm flex-1" x-model="patIgnorarNovo"
+                       placeholder="ex.: Alterar Local ou Forma de Pagamento" @keydown.enter="addPatIgnorar()">
+                <button class="btn btn-sm btn-primary" :disabled="!patIgnorarNovo.trim()" @click="addPatIgnorar()">Adicionar</button>
+            </div>
+            <div class="max-h-[300px] overflow-y-auto space-y-1 pr-1">
+                <template x-for="(t, i) in patIgnorar" :key="i">
+                    <div class="flex items-center gap-2 text-sm py-0.5 border-b border-base-300">
+                        <span class="flex-1" x-text="t"></span>
+                        <button class="btn btn-ghost btn-xs text-error px-1" @click="delPatIgnorar(i)" title="Remover">✕</button>
+                    </div>
+                </template>
+                <div x-show="patIgnorar.length === 0" class="text-sm text-base-content/40 py-2">Nenhuma espécie ignorada.</div>
+            </div>
+            <div class="modal-action items-center">
+                <span class="text-xs text-success mr-auto" x-show="patIgnorarMsg" x-text="patIgnorarMsg"></span>
+                <button class="btn btn-primary btn-sm" @click="salvarPatIgnorar()">Salvar</button>
+                <button class="btn btn-sm" @click="patIgnorarModal=false">Fechar</button>
+            </div>
+        </div>
+        <div class="modal-backdrop" @click="patIgnorarModal=false"></div>
+    </div>
+
+    <!-- Modal de log do histórico -->
+    <div class="modal" :class="{'modal-open': logAberto}">
+        <div class="modal-box max-w-2xl">
+            <h3 class="font-bold text-lg mb-2">Log do processamento</h3>
+            <div class="space-y-2 max-h-96 overflow-y-auto">
+                <template x-for="(p, i) in logAtual" :key="i">
+                    <div class="flex gap-2 text-sm border-b border-base-300 pb-1">
+                        <span x-text="p.ok===true?'✓':(p.ok===false?'✕':'•')"
+                              :class="p.ok===true?'text-success':(p.ok===false?'text-error':'text-base-content/50')"></span>
+                        <div>
+                            <div class="font-medium" x-text="p.etapa"></div>
+                            <div class="text-base-content/60" x-text="p.detalhe"></div>
+                            <div class="text-xs text-base-content/40" x-text="(p.ts||'').replace('T',' ')"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            <div class="modal-action"><button class="btn" @click="logAberto=false">Fechar</button></div>
+        </div>
+        <div class="modal-backdrop" @click="logAberto=false"></div>
+    </div>
+
+    <!-- Modal: log do download -->
+    <div class="modal" :class="{'modal-open': logDlAberto}">
+        <div class="modal-box max-w-[50vw]">
+            <h3 class="font-bold text-lg mb-2">Log do download — <span x-text="logDlTitulo"></span></h3>
+            <div class="bg-base-300 rounded p-3 text-[11px] leading-[1.65] font-mono h-[340px] overflow-y-auto">
+                <template x-for="(l, i) in logDlItens" :key="i">
+                    <div :class="{
+                        'text-success': l.level==='ok', 'text-error': l.level==='erro',
+                        'text-base-content/50': l.level==='muted', 'text-info': l.level==='info',
+                        'text-primary font-semibold': l.level==='novo'}" x-text="l.msg"></div>
+                </template>
+                <div x-show="logDlItens.length === 0" class="text-base-content/40">Sem log registrado.</div>
+            </div>
+            <div class="modal-action"><button class="btn" @click="logDlAberto=false">Fechar</button></div>
+        </div>
+        <div class="modal-backdrop" @click="logDlAberto=false"></div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+/* Radios nativos com o acento Fluent do painel. */
+.sat-radio {
+    appearance: auto;
+    -webkit-appearance: radio;
+    accent-color: var(--accent);
+    width: 15px; height: 15px;
+    margin: 0; cursor: pointer; vertical-align: middle;
+}
+.badge-ocre {
+    background-color: #efe6cf !important;
+    color: #6b5a2b !important;
+    border: 1px solid #ddd0a3 !important;
+}
+/* Filtro por NB — badge/caixa com tonalidade avermelhada (acima da narrativa) */
+.badge-nb {
+    background-color: #f6d6d6 !important;
+    color: #9b1c1c !important;
+    border: 1px solid #e0a3a3 !important;
+    font-weight: 600;
+}
+.nb-filtro-box {
+    background: rgba(214, 69, 69, 0.10);
+    border: 1px solid rgba(214, 69, 69, 0.40);
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+.nb-filtro-hint { color: var(--text-tertiary); }
+/* Ponto vermelho de falha ao lado do badge de documentos (clicável → abre o log) */
+.sat-falha-dot {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: #e2574c;
+    box-shadow: 0 0 0 2px rgba(226, 87, 76, 0.25);
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+/* Tabela de documentos baixados (accordion) — fonte menor e linhas compactas */
+.sat-docs { font-size: 11.5px; }
+.sat-docs td, .sat-docs th { padding-top: 3px; padding-bottom: 3px; }
+</style>
+<script>
+function satPage() {
+    return {
+        pendentes: [], historico: [], grupos: [],
+        padrao: '01 - PREV_DIVPREV', grupoSel: '01 - PREV_DIVPREV',
+        comPrazo: false, prazoDias: 15,
+        manualPaj: '', addingManual: false, manualMsg: '', manualMsgErro: false,
+        carregando: false, carregandoGrupos: false, rodando: false,
+        sseAberto: false, sseLog: [], sseStatus: '', sseFechavel: false, _es: null, sseTipo: '',
+        logAberto: false, logAtual: [],
+        sessaoOk: false, sessaoBusy: false, sessaoMsg: '', naoLogadoModal: false,
+        tempoEntre: 5, esperaBloqueio: 45,
+        logsDownload: {}, logDlAberto: false, logDlItens: [], logDlTitulo: '',
+        docsAbertos: {}, docsArquivos: {},
+        narrativaAberta: {}, narrativas: {},
+        tiposModal: false, tiposCatalogo: [], tiposPadrao: null, tiposPorPretensao: {},
+        tiposPretSel: '__padrao__', tiposSel: [], tiposPretensoes: [], tiposMsg: '',
+        tiposInstituidor: null, tiposInstituidorDefault: [],
+        patIgnorarModal: false, patIgnorar: [], patIgnorarNovo: '', patIgnorarMsg: '',
+        instModal: false, instCpf: '', instNome: '', instAlvo: null,
+        baixarMaisModal: false, bmAlvo: null, bmCpf: '', bmSel: [], bmLista: [], bmCarregando: false, bmModo: 'concluido', bmSemInventario: false,
+
+        async init() {
+            // NÃO abrir o navegador ao carregar a aba: checagem LEVE (peek) só LÊ o estado
+            // (não lança o Chromium). O navegador só abre pelo botão "Abrir SAT / Login".
+            this.verificarSessao();
+            await this.carregarPrefs();
+            this.carregarTipos();
+            await this.carregarPendentes();
+            this.carregarHistorico();
+            // atualização automática do selo de sessão (checagem LEVE, não navega)
+            setInterval(() => this.verificarSessaoLeve(), 5000);
+        },
+        async carregarPendentes() {
+            this.carregando = true;
+            try {
+                const j = await (await fetch('/api/sat/pendentes/manuais')).json();
+                this.pendentes = j.itens || [];
+            } catch (e) { this.pendentes = []; }
+            finally { this.carregando = false; }
+        },
+        async carregarTipos() {
+            try {
+                const j = await (await fetch('/api/sat/tipos')).json();
+                this.tiposCatalogo = j.tipos || [];
+                this.tiposPadrao = (j.padrao === undefined ? null : j.padrao);  // null = todos
+                this.tiposPorPretensao = j.por_pretensao || {};
+                this.tiposInstituidor = (j.instituidor === undefined ? null : j.instituidor);
+                this.tiposInstituidorDefault = j.instituidor_default || [];
+            } catch (e) {}
+        },
+        tiposGrupos() {
+            const g = []; this.tiposCatalogo.forEach(t => { if (!g.includes(t.grupo)) g.push(t.grupo); }); return g;
+        },
+        tiposDoGrupo(g) { return this.tiposCatalogo.filter(t => t.grupo === g); },
+        _keysParaPret(pret) {
+            if (pret === '__instituidor__') {
+                return this.tiposInstituidor ? [...this.tiposInstituidor] : [...this.tiposInstituidorDefault];
+            }
+            if (pret !== '__padrao__' && this.tiposPorPretensao[pret]) return [...this.tiposPorPretensao[pret]];
+            return this.tiposPadrao === null ? this.tiposCatalogo.map(t => t.key) : [...this.tiposPadrao];
+        },
+        ehDerivada(pret) {
+            const p = (pret || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+            return p.includes('pensao por morte') || p.includes('reclusao');
+        },
+        baixarInstituidor() {
+            const p = this.instAlvo;
+            if (!p || !this.instCpf) return;
+            if (!this.sessaoOk) { this.instModal = false; this.naoLogadoModal = true; return; }
+            this.instModal = false;
+            const cpf = this.instCpf, nome = this.instNome;
+            this.rodando = true; this.sseTipo = 'download';
+            this.sseLog = []; this.sseStatus = '— baixando docs do instituidor';
+            this.sseFechavel = false; this.sseAberto = true;
+            const delay = Math.max(0, Number(this.tempoEntre) || 0);
+            const bloqueio = Math.max(0, Number(this.esperaBloqueio) || 0);
+            const url = `/api/sat/${encodeURIComponent(p.paj_norm)}/baixar-instituidor`
+                + `?cpf=${encodeURIComponent(cpf)}&nome=${encodeURIComponent(nome)}`
+                + `&delay=${delay}&bloqueio=${bloqueio}`;
+            const es = new EventSource(url); this._es = es;
+            es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
+            es.addEventListener('done', (ev) => {
+                let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
+                this.sseStatus = res.ok ? '— concluído ✓' : '— com aviso';
+                this.sseFechavel = true; this.rodando = false; es.close(); this._es = null;
+                if (res && Array.isArray(res.salvos) && res.salvos.length) p.n_instituidor = res.salvos.length;
+            });
+            es.onerror = () => {
+                this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
+                es.close(); this._es = null;
+            };
+        },
+        async abrirBaixarMais(r, modo = 'concluido') {
+            // modo 'concluido' = PAJ já anexado (histórico) → baixa+anexa (movimentação).
+            // modo 'pendente'  = PAJ ainda não anexado → baixa e junta ao acervo pendente.
+            this.bmModo = modo;
+            this.bmAlvo = r; this.bmCpf = r.cpf || ''; this.bmSel = []; this.bmLista = [];
+            this.bmSemInventario = false;
+            this.baixarMaisModal = true; this.bmCarregando = true;
+            try {
+                const j = await (await fetch(`/api/sat/${encodeURIComponent(r.paj_norm)}/inventario`)).json();
+                if (j.cpf) this.bmCpf = j.cpf;   // CPF vem do log de download
+                const itens = j.itens || [];
+                if (itens.length) {
+                    this.bmLista = this._montarBmLista(itens, j.tipos || []);
+                } else {
+                    // Sem inventário (1º download interrompido/sem log): oferece o CATÁLOGO
+                    // de tipos para selecionar o que baixar (todos os subitens de cada tipo).
+                    this.bmSemInventario = true;
+                    this.bmLista = this._montarBmListaCatalogo(j.tipos || []);
+                }
+            } catch (e) { this.bmLista = []; }
+            finally { this.bmCarregando = false; }
+        },
+        _montarBmListaCatalogo(tipos) {
+            const grupos = []; tipos.forEach(t => { if (!grupos.includes(t.grupo)) grupos.push(t.grupo); });
+            const out = [];
+            grupos.forEach(g => {
+                const rows = tipos.filter(t => t.grupo === g).map(t => ({
+                    alvo: t.key + '|', label: t.label + ' — todos', status: '', ja_baixado: false, ja_anexado: false,
+                }));
+                if (rows.length) out.push({ grupo: g, rows });
+            });
+            return out;
+        },
+        _montarBmLista(itens, tipos) {
+            const grupos = []; tipos.forEach(t => { if (!grupos.includes(t.grupo)) grupos.push(t.grupo); });
+            // Oculta só o que não faz sentido rebaixar: sem_dados (SAT sem documento) e
+            // descartado (subtarefa/duplicata). Os pulado_prazo (PAT >5 anos) APARECEM —
+            // podem ser baixados por pedido explícito (a regra dos 5 anos não vale aqui).
+            const vis = itens.filter(it => !['sem_dados', 'descartado'].includes(it.status));
+            const out = [];
+            grupos.forEach(g => {
+                const rows = [];
+                tipos.filter(t => t.grupo === g).forEach(t => {
+                    vis.filter(it => it.key === t.key).forEach(it => {
+                        let label;
+                        if (it.key === 'pat') {
+                            const svc = it.servico || 'Tarefa PAT';
+                            label = svc + (it.sub ? (' — protocolo ' + it.sub) : '');
+                        } else {
+                            label = t.label + (it.sub ? (' — ' + it.sub) : '');
+                        }
+                        rows.push({
+                            alvo: it.key + '|' + (it.sub || ''),
+                            label: label,
+                            status: it.status, ja_baixado: it.ja_baixado, ja_anexado: it.ja_anexado,
+                        });
+                    });
+                });
+                if (rows.length) out.push({ grupo: g, rows });
+            });
+            return out;
+        },
+        bmStatusTxt(row) {
+            const m = [];
+            if (row.ja_baixado) m.push('Já baixado');
+            if (row.ja_anexado) m.push('Já anexado ao PAJ');
+            if (!row.ja_baixado) {
+                if (row.status === 'nao_selecionado') m.push('não baixado (desativado p/ a pretensão)');
+                else if (row.status === 'nao_relacionado') m.push('não relacionado à pretensão');
+                else if (row.status === 'antirobo') m.push('bloqueado (antirobô) no 1º acesso');
+                else if (row.status === 'indisponivel') m.push('indisponível no SAT');
+                else if (row.status === 'sem_dados') m.push('sem dados no SAT');
+                else if (row.status === 'falha') m.push('falhou no 1º download');
+                else if (row.status === 'nao_consultado') m.push('não consultado (indeferido)');
+                else if (row.status === 'pulado_prazo') m.push('pulado - protocolo há mais de 5 anos');
+                else if (row.status === 'nao_filtrado_nb') m.push('pulado - NB não indicado no filtro');
+                else if (row.status === 'ignorado') m.push('ignorado - espécie na lista de ignorados');
+            }
+            return m.join(' · ');
+        },
+        baixarMais() {
+            const r = this.bmAlvo;
+            if (!r || !this.bmCpf || this.bmSel.length === 0) return;
+            if (!this.sessaoOk) { this.baixarMaisModal = false; this.naoLogadoModal = true; return; }
+            this.baixarMaisModal = false;
+            const cpf = this.bmCpf, alvos = this.bmSel.join(',');
+            const delay = Math.max(0, Number(this.tempoEntre) || 0);
+            const bloqueio = Math.max(0, Number(this.esperaBloqueio) || 0);
+            this.rodando = true; this.sseTipo = 'download';
+            this.sseLog = []; this.sseStatus = '— baixando (complementar)'; this.sseFechavel = false; this.sseAberto = true;
+            const url = `/api/sat/${encodeURIComponent(r.paj_norm)}/baixar-complementar`
+                + `?cpf=${encodeURIComponent(cpf)}&nome=${encodeURIComponent(r.assistido || '')}`
+                + `&delay=${delay}&bloqueio=${bloqueio}&alvos=${encodeURIComponent(alvos)}`;
+            const es = new EventSource(url); this._es = es;
+            es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
+            es.addEventListener('done', (ev) => {
+                let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
+                es.close(); this._es = null;
+                const baixou = res && Array.isArray(res.salvos) && res.salvos.length;
+                if (!baixou) {
+                    this.sseStatus = '— nada baixado (sem novos documentos)';
+                    this.sseFechavel = true; this.rodando = false;
+                    if (this.bmModo === 'pendente') this.carregarPendentes();
+                    return;
+                }
+                if (this.bmModo === 'pendente') {
+                    // PAJ ainda NÃO anexado: junta os PDFs ao acervo pendente (SEM movimentação).
+                    this.sseTipo = 'processar';
+                    this.sseStatus = '— juntando ao acervo do PAJ';
+                    this.sseLog.push({ level: 'novo', msg: 'Juntando os documentos complementares ao acervo pendente (sem anexação)…' });
+                    fetch(`/api/sat/${encodeURIComponent(r.paj_norm)}/mesclar-complementar`, { method: 'POST' })
+                        .then(x => x.json()).then(j => {
+                            this.sseLog.push({ level: 'ok', msg: `✓ ${(j.movidos || []).length} documento(s) juntado(s) ao acervo. Total agora: ${j.n_arquivos}.` });
+                            this.sseStatus = '— concluído ✓';
+                            this.sseFechavel = true; this.rodando = false;
+                            this.carregarPendentes();
+                        }).catch(() => {
+                            this.sseLog.push({ level: 'erro', msg: 'Falha ao juntar os documentos ao acervo.' });
+                            this.sseStatus = '— com aviso'; this.sseFechavel = true; this.rodando = false;
+                        });
+                    return;
+                }
+                // modo 'concluido': encadeia a anexação (movimentação) do complementar
+                this.sseTipo = 'processar';  // não é mais download (esconde "Cancelar")
+                this.sseStatus = '— anexando (complementar)';
+                this.sseLog.push({ level: 'novo', msg: 'Anexando os documentos complementares (movimentação)…' });
+                const url2 = `/api/sat/${encodeURIComponent(r.paj_norm)}/anexar-complementar`
+                    + `?id=${encodeURIComponent(r.id_processo || '')}&assistido=${encodeURIComponent(r.assistido || '')}`;
+                const es2 = new EventSource(url2); this._es = es2;
+                es2.addEventListener('log', (e2) => { try { this.sseLog.push(JSON.parse(e2.data)); } catch (e) {} });
+                es2.addEventListener('done', (e2) => {
+                    let r2 = {}; try { r2 = JSON.parse(e2.data); } catch (e) {}
+                    this.sseStatus = r2.ok ? '— concluído ✓' : '— com aviso';
+                    this.sseFechavel = true; this.rodando = false; es2.close(); this._es = null;
+                    this.carregarHistorico();
+                });
+                es2.onerror = () => {
+                    this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
+                    es2.close(); this._es = null;
+                };
+            });
+            es.onerror = () => {
+                this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
+                es.close(); this._es = null;
+            };
+        },
+        anexarInstituidor(p) {
+            if (this.rodando) return;
+            this.rodando = true; this.sseTipo = 'processar';
+            this.sseLog = []; this.sseStatus = '— anexando docs do instituidor';
+            this.sseFechavel = false; this.sseAberto = true;
+            const url = `/api/sat/${encodeURIComponent(p.paj_norm)}/anexar-instituidor`
+                + `?id=${encodeURIComponent(p.id_processo || '')}&assistido=${encodeURIComponent(p.assistido || '')}`;
+            const es = new EventSource(url); this._es = es;
+            es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
+            es.addEventListener('done', (ev) => {
+                let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
+                this.sseStatus = res.ok ? '— concluído ✓' : '— com falha ✕';
+                this.sseFechavel = true; this.rodando = false; es.close(); this._es = null;
+                this.carregarHistorico();
+            });
+            es.onerror = () => {
+                this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
+                es.close(); this._es = null;
+            };
+        },
+        abrirTipos() {
+            const set = new Set(Object.keys(this.tiposPorPretensao));
+            this.pendentes.forEach(p => { if (p.pretensao) set.add(p.pretensao); });
+            this.tiposPretensoes = [...set].sort();
+            this.tiposPretSel = '__padrao__';
+            this.tiposSel = this._keysParaPret('__padrao__');
+            this.tiposModal = true;
+        },
+        onTiposPretChange() { this.tiposSel = this._keysParaPret(this.tiposPretSel); },
+        tiposMarcarTodos(marcar) { this.tiposSel = marcar ? this.tiposCatalogo.map(t => t.key) : []; },
+        async salvarTipos() {
+            try {
+                const j = await (await fetch('/api/sat/tipos', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pretensao: this.tiposPretSel, keys: this.tiposSel })
+                })).json();
+                if (j.ok) {
+                    this.tiposPadrao = (j.padrao === undefined ? null : j.padrao);
+                    this.tiposPorPretensao = j.por_pretensao || {};
+                    if (j.instituidor !== undefined) this.tiposInstituidor = j.instituidor;
+                    this.tiposMsg = 'Alterações salvas ✓';
+                } else { this.tiposMsg = 'Falha ao salvar'; }
+            } catch (e) { this.tiposMsg = 'Falha ao salvar'; }
+            clearTimeout(this._tiposMsgT);
+            this._tiposMsgT = setTimeout(() => { this.tiposMsg = ''; }, 2500);
+            // NÃO fecha o modal — o fechamento é só pelo botão "Fechar".
+        },
+        async abrirPatIgnorar() {
+            this.patIgnorarNovo = ''; this.patIgnorarMsg = '';
+            try {
+                const j = await (await fetch('/api/sat/pat-ignorar')).json();
+                this.patIgnorar = j.itens || [];
+            } catch (e) { this.patIgnorar = []; }
+            this.patIgnorarModal = true;
+        },
+        addPatIgnorar() {
+            const t = (this.patIgnorarNovo || '').trim();
+            if (!t) return;
+            if (!this.patIgnorar.some(x => x.toLowerCase() === t.toLowerCase())) this.patIgnorar.push(t);
+            this.patIgnorarNovo = '';
+        },
+        delPatIgnorar(i) { this.patIgnorar.splice(i, 1); },
+        async salvarPatIgnorar() {
+            try {
+                const j = await (await fetch('/api/sat/pat-ignorar', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ itens: this.patIgnorar })
+                })).json();
+                if (j.ok) { this.patIgnorar = j.itens || []; this.patIgnorarMsg = 'Alterações salvas ✓'; }
+                else { this.patIgnorarMsg = 'Falha ao salvar'; }
+            } catch (e) { this.patIgnorarMsg = 'Falha ao salvar'; }
+            clearTimeout(this._patIgnMsgT);
+            this._patIgnMsgT = setTimeout(() => { this.patIgnorarMsg = ''; }, 2500);
+        },
+        async verificarSessao() {
+            // usa a checagem LEVE (/sessao-leve → peek): NÃO lança o navegador.
+            this.sessaoBusy = true;
+            try {
+                const r = await (await fetch('/api/sat/sessao-leve')).json();
+                this.sessaoOk = !!r.logado; this.sessaoMsg = r.msg || '';
+            } catch (e) { this.sessaoMsg = 'Erro ao verificar a sessão.'; }
+            finally { this.sessaoBusy = false; }
+        },
+        async verificarSessaoLeve() {
+            // não interfere durante um download nem numa checagem manual em curso
+            if (this.rodando || this.sessaoBusy) return;
+            try {
+                const r = await (await fetch('/api/sat/sessao-leve')).json();
+                this.sessaoOk = !!r.logado; this.sessaoMsg = r.msg || '';
+            } catch (e) { /* silencioso — é polling de fundo */ }
+        },
+        async abrirSat() {
+            this.sessaoBusy = true; this.sessaoMsg = 'Abrindo a janela do SAT…';
+            try {
+                const r = await (await fetch('/api/sat/abrir')).json();
+                this.sessaoOk = !!r.logado; this.sessaoMsg = r.msg || '';
+            } catch (e) { this.sessaoMsg = 'Erro ao abrir a janela.'; }
+            finally { this.sessaoBusy = false; }
+        },
+        dataPrazo() {
+            const d = new Date(); d.setDate(d.getDate() + (this.prazoDias || 0));
+            return d.toLocaleDateString('pt-BR');
+        },
+        async carregarPrefs() {
+            // Valores padrão (config → "Arquivos SAT Central"): caixa de tramitação,
+            // prazo (sem prazo/dias), tempo entre consultas e espera após bloqueio.
+            try {
+                const s = await (await fetch('/api/config/sat-central')).json();
+                if (s.caixa) { this.padrao = s.caixa; this.grupoSel = s.caixa; }
+                this.comPrazo = (s.prazo_modo === 'dias');
+                if (s.prazo_dias) this.prazoDias = s.prazo_dias;
+                if (typeof s.tempo_entre === 'number') this.tempoEntre = s.tempo_entre;
+                if (typeof s.espera_bloqueio === 'number') this.esperaBloqueio = s.espera_bloqueio;
+            } catch (e) {}
+        },
+        async adicionarManual() {
+            const txt = (this.manualPaj || '').trim();
+            if (!txt || this.addingManual) return;
+            // Cofre bloqueado → abre o modal de desbloqueio (senha-mestra). Só prossegue
+            // após desbloquear; o login no SISDPU é automático com os dados do cofre.
+            if (window.garantirCofre && !(await window.garantirCofre())) return;
+            this.addingManual = true; this.manualMsg = 'Verificando a autenticação no SISDPU e extraindo os dados do PAJ…'; this.manualMsgErro = false;
+            try {
+                const j = await (await fetch('/api/sat/pendentes/manual', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paj: txt })
+                })).json();
+                if (j.ok && (j.itens || []).length) {
+                    this.manualPaj = '';
+                    this.manualMsg = `PAJ ${j.itens[0].numero} adicionado (${j.itens[0].assistido || 'sem nome'}).`;
+                    this.manualMsgErro = false;
+                    await this.carregarPendentes();
+                } else {
+                    const e = (j.erros && j.erros[0]) ? j.erros[0].erro : 'Não foi possível adicionar o PAJ.';
+                    this.manualMsg = e; this.manualMsgErro = true;
+                }
+            } catch (e) { this.manualMsg = 'Erro de comunicação com o servidor.'; this.manualMsgErro = true; }
+            finally { this.addingManual = false; }
+            clearTimeout(this._manualMsgT);
+            this._manualMsgT = setTimeout(() => { this.manualMsg = ''; }, 6000);
+        },
+        async removerManual(p) {
+            if (this.rodando) return;
+            const ok = confirm(
+                `Remover o PAJ ${p.paj} (${p.assistido}) da lista?\n\n` +
+                `Os dados deste PAJ serão apagados do painel e os arquivos já ` +
+                `baixados do SAT serão EXCLUÍDOS do disco. Esta ação não pode ser desfeita.`
+            );
+            if (!ok) return;
+            try {
+                const res = await fetch('/api/sat/pendentes/manual/del', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paj_norm: p.paj_norm })
+                });
+                if (!res.ok) { alert('Falha ao remover o PAJ no servidor. Tente novamente.'); return; }
+                await this.carregarPendentes();
+                this.carregarHistorico();
+            } catch (e) { alert('Erro de comunicação com o servidor ao remover o PAJ.'); }
+        },
+        async carregarHistorico() {
+            try {
+                const j = await (await fetch('/api/sat/historico')).json();
+                this.historico = j.registros || [];
+            } catch (e) {}
+        },
+        async carregarGrupos() {
+            this.carregandoGrupos = true;
+            try {
+                const g = await (await fetch('/api/sat/grupos')).json();
+                this.grupos = g.grupos || [];
+            } catch (e) {}
+            finally { this.carregandoGrupos = false; }
+        },
+        copiar(txt) { navigator.clipboard.writeText(txt); },
+        verLog(r) { this.logAtual = r.log || []; this.logAberto = true; },
+        async verLogDownload(p) {
+            let ev = this.logsDownload[p.paj_norm];
+            if (!ev) {
+                try {
+                    const j = await (await fetch(`/api/sat/${encodeURIComponent(p.paj_norm)}/log-download`)).json();
+                    ev = j.eventos || [];
+                } catch (e) { ev = []; }
+            }
+            this.logDlItens = ev; this.logDlTitulo = p.paj; this.logDlAberto = true;
+        },
+        fmtTam(b) {
+            b = b || 0;
+            if (b < 1024) return b + ' B';
+            if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
+            return (b / 1048576).toFixed(1) + ' MB';
+        },
+        fmtDataHora(ts) {
+            ts = ts || '';
+            const d = ts.slice(0, 10).split('-');
+            if (d.length !== 3) return '';
+            const hora = ts.slice(11, 16);
+            return `${d[2]}-${d[1]}-${d[0]}` + (hora ? ` ${hora}` : '');
+        },
+        async carregarArquivos(p) {
+            try {
+                const j = await (await fetch(`/api/sat/${encodeURIComponent(p.paj_norm)}/arquivos`)).json();
+                this.docsArquivos[p.paj_norm] = j.arquivos || [];
+            } catch (e) { this.docsArquivos[p.paj_norm] = []; }
+        },
+        async toggleDocs(p) {
+            if (this.docsAbertos[p.paj_norm]) { this.docsAbertos[p.paj_norm] = false; return; }
+            await this.carregarArquivos(p);
+            this.docsAbertos[p.paj_norm] = true;
+        },
+        async carregarNarrativa(p) {
+            if (this.narrativas[p.paj_norm] !== undefined) return;
+            if (p.narrativa) { this.narrativas[p.paj_norm] = p.narrativa; return; }
+            try {
+                const j = await (await fetch(`/api/sat/${encodeURIComponent(p.paj_norm)}/narrativa`)).json();
+                this.narrativas[p.paj_norm] = j.texto || '(sem narrativa cadastrada)';
+            } catch (e) { this.narrativas[p.paj_norm] = '(erro ao carregar a narrativa)'; }
+        },
+        async toggleNarrativa(p) {
+            if (this.narrativaAberta[p.paj_norm]) { this.narrativaAberta[p.paj_norm] = false; return; }
+            this.narrativaAberta[p.paj_norm] = true;
+            await this.carregarNarrativa(p);
+        },
+        async excluir(p, nome) {
+            try {
+                const j = await (await fetch(`/api/sat/${encodeURIComponent(p.paj_norm)}/excluir-arquivo`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nome: nome })
+                })).json();
+                await this.carregarArquivos(p);
+                if (typeof j.n_arquivos === 'number') p.n_arquivos = j.n_arquivos;
+            } catch (e) {}
+        },
+        async recuperar(p, nome) {
+            try {
+                const j = await (await fetch(`/api/sat/${encodeURIComponent(p.paj_norm)}/recuperar-arquivo`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nome: nome })
+                })).json();
+                await this.carregarArquivos(p);
+                if (typeof j.n_arquivos === 'number') p.n_arquivos = j.n_arquivos;
+            } catch (e) {}
+        },
+        baixar(p) {
+            if (this.rodando) return Promise.resolve();
+            if (!p.cpf) {
+                this.sessaoMsg = `Sem CPF do assistido no PAJ ${p.paj}.`;
+                return Promise.resolve();
+            }
+            if (!this.sessaoOk) {
+                this.naoLogadoModal = true;
+                return Promise.resolve();
+            }
+            return new Promise((resolve) => {
+                this.rodando = true; this.sseTipo = 'download';
+                this.sseLog = []; this.sseStatus = '— baixando do SAT'; this.sseFechavel = false; this.sseAberto = true;
+                const delay = Math.max(0, Number(this.tempoEntre) || 0);
+                const bloqueio = Math.max(0, Number(this.esperaBloqueio) || 0);
+                const url = `/api/sat/${encodeURIComponent(p.paj_norm)}/baixar`
+                    + `?cpf=${encodeURIComponent(p.cpf)}&nome=${encodeURIComponent(p.assistido)}`
+                    + `&delay=${delay}&bloqueio=${bloqueio}`
+                    + `&pretensao=${encodeURIComponent(p.pretensao || '')}`
+                    + `&nbs=${encodeURIComponent(p.nbFiltro || '')}`;
+                const es = new EventSource(url); this._es = es;
+                es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
+                es.addEventListener('done', (ev) => {
+                    let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
+                    this.sseStatus = res.ok ? '— concluído ✓' : '— com aviso';
+                    this.sseFechavel = true; this.rodando = false; es.close(); this._es = null;
+                    this.logsDownload[p.paj_norm] = this.sseLog.slice();
+                    this.carregarHistorico();
+                    this.carregarPendentes();
+                    resolve(res);
+                });
+                es.onerror = () => {
+                    this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
+                    es.close(); this._es = null; resolve({ ok: false });
+                };
+            });
+        },
+        async processar(p) {
+            if (this.rodando) return;
+            if (window.garantirCofre && !(await window.garantirCofre())) return;
+            return new Promise((resolve) => {
+                this.rodando = true; this.sseTipo = 'processar';
+                this.sseLog = []; this.sseStatus = '— em andamento'; this.sseFechavel = false; this.sseAberto = true;
+                const url = `/api/sat/${encodeURIComponent(p.paj_norm)}/processar`
+                    + `?grupo=${encodeURIComponent(this.grupoSel)}`
+                    + `&prazo=${this.comPrazo ? (this.prazoDias || 0) : 0}`;
+                const es = new EventSource(url); this._es = es;
+                es.addEventListener('log', (ev) => {
+                    try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {}
+                });
+                es.addEventListener('done', (ev) => {
+                    let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
+                    this.sseStatus = res.ok ? '— concluído ✓' : '— com falha ✕';
+                    this.sseFechavel = true; this.rodando = false;
+                    es.close(); this._es = null;
+                    this.carregarHistorico();
+                    this.carregarPendentes();
+                    resolve(res);
+                });
+                es.onerror = () => {
+                    this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
+                    es.close(); this._es = null; resolve({ok: false});
+                };
+            });
+        },
+        sseFechar() {
+            if (this._es) { this._es.close(); this._es = null; }
+            this.sseAberto = false;
+            this.carregarPendentes();
+        },
+        cancelarDownload() {
+            // fecha o stream (o backend detecta a desconexão e interrompe a rotina)
+            if (this._es) { this._es.close(); this._es = null; }
+            this.rodando = false; this.sseFechavel = true;
+            this.sseStatus = '— cancelado';
+            this.sseLog.push({ level: 'erro', msg: '■ Download cancelado pelo usuário.' });
+        },
+    };
+}
+</script>
+{% endblock %}

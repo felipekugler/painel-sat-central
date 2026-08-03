@@ -1,0 +1,751 @@
+{% extends "base.html" %}
+{% block title %}Configurações — Painel SAT Central{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <h1 class="text-xl font-bold" style="color: var(--text);">Configurações</h1>
+
+    <!-- Aparência -->
+    <div class="card bg-base-100 border border-base-300">
+        <div class="card-body gap-4">
+            <h3 class="text-lg font-semibold text-base-content/80 border-b border-base-300 pb-2">
+                Aparência
+            </h3>
+            <p class="text-sm text-base-content/60">
+                Escolha o tema do painel. "Sistema" acompanha o modo claro/escuro do Windows.
+                A escolha vale neste navegador.
+            </p>
+            <div id="tema-seg" class="tema-seg">
+                <button type="button" data-tema="system" onclick="definirTema('system')">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" /></svg>
+                    Sistema
+                </button>
+                <button type="button" data-tema="light" onclick="definirTema('light')">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" /></svg>
+                    Claro
+                </button>
+                <button type="button" data-tema="dark" onclick="definirTema('dark')">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" /></svg>
+                    Escuro
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cofre de credenciais (acesso ao SISDPU) -->
+    <div class="card bg-base-100 border border-base-300" x-data="cofreAcesso()" x-init="init()">
+        <div class="card-body gap-4">
+            <h3 class="text-lg font-semibold text-base-content/80 border-b border-base-300 pb-2">
+                Cofre de credenciais
+            </h3>
+            <p class="text-sm text-base-content/60">
+                Uma <strong>senha-mestra</strong> protege o usuário/senha do <strong>SISDPU</strong>.
+                Ficam <strong>cifrados no computador</strong>; a senha-mestra <strong>não é gravada</strong>
+                e vale só nesta sessão (desbloqueie ao abrir o painel). O <strong>SAT</strong> não entra
+                aqui — seu login (CPF/CAPTCHA/2FA) é feito por você na janela.
+            </p>
+
+            <!-- Estado do cofre -->
+            <div class="flex items-center gap-3 flex-wrap">
+                <span class="text-sm font-medium">Cofre:</span>
+                <template x-if="!cofre.configurado">
+                    <span class="badge badge-ghost">Não criado</span>
+                </template>
+                <template x-if="cofre.configurado && !cofre.destrancado">
+                    <span class="badge badge-warning">🔒 Trancado</span>
+                </template>
+                <template x-if="cofre.destrancado">
+                    <span class="badge badge-success">🔓 Destrancado</span>
+                </template>
+
+                <template x-if="cofre.configurado && !cofre.destrancado">
+                    <button class="btn btn-sm btn-primary" @click="abrirUnlock()">Desbloquear</button>
+                </template>
+                <template x-if="cofre.destrancado">
+                    <button class="btn btn-sm btn-ghost" @click="bloquear()">Bloquear</button>
+                </template>
+                <template x-if="cofre.configurado">
+                    <button class="btn btn-sm btn-ghost" @click="abrirTrocar()">Trocar senha-mestra</button>
+                </template>
+            </div>
+
+            <!-- Sistemas -->
+            <div class="flex flex-col gap-2 pt-3 border-t border-base-300">
+                <template x-for="s in sistemas" :key="s.chave">
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                        <div class="flex items-center gap-2">
+                            <span class="font-medium" x-text="s.rotulo"></span>
+                            <template x-if="cofre.destrancado && s.tem_credencial">
+                                <span class="badge badge-success badge-sm">cadastrado<span x-show="s.usuario" x-text="' · ' + s.usuario"></span></span>
+                            </template>
+                            <template x-if="cofre.destrancado && !s.tem_credencial">
+                                <span class="badge badge-ghost badge-sm">não cadastrado</span>
+                            </template>
+                            <template x-if="!cofre.destrancado && cofre.configurado">
+                                <span class="badge badge-ghost badge-sm">🔒 desbloqueie para ver</span>
+                            </template>
+                        </div>
+                        <div class="flex gap-2">
+                            <button class="btn btn-xs btn-primary" @click="abrirCad(s.chave)"
+                                    x-text="(cofre.destrancado && s.tem_credencial) ? 'Editar' : 'Cadastrar'"></button>
+                            <template x-if="cofre.destrancado && s.tem_credencial">
+                                <button class="btn btn-xs btn-ghost text-error" @click="abrirRemover(s.chave)">Remover</button>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Modal: cadastrar/editar credenciais de um sistema -->
+            <div class="modal" :class="{'modal-open': modal==='cad'}">
+                <div class="modal-box max-w-md">
+                    <h3 class="font-bold text-lg mb-3">Credenciais — <span x-text="rotuloDe(form.sistema)"></span></h3>
+                    <template x-if="!cofre.configurado">
+                        <p class="text-xs text-base-content/60 mb-3">
+                            Este é o primeiro cadastro: você vai <strong>criar a senha-mestra</strong> do cofre.
+                        </p>
+                    </template>
+                    <template x-if="cofre.configurado">
+                        <p class="text-xs text-base-content/60 mb-3">
+                            Use a <strong>mesma senha-mestra</strong> do cofre para gravar/atualizar esta credencial.
+                        </p>
+                    </template>
+                    <form @submit.prevent="salvarCredenciais()" class="flex flex-col gap-3">
+                        <label class="form-control">
+                            <span class="label-text text-xs mb-1">Usuário <span class="text-error">*</span></span>
+                            <input type="text" class="input input-bordered input-sm" x-model="form.usuario" autocomplete="username" required>
+                        </label>
+                        <label class="form-control">
+                            <span class="label-text text-xs mb-1">Senha <span class="text-error">*</span></span>
+                            <input type="password" class="input input-bordered input-sm" x-model="form.senha" autocomplete="off" required>
+                        </label>
+                        <label class="form-control">
+                            <span class="label-text text-xs mb-1"
+                                  x-text="cofre.configurado ? 'Senha-mestra do cofre' : 'Criar senha-mestra (mín. 6)'"></span>
+                            <input type="password" class="input input-bordered input-sm" x-model="form.senha_mestra" autocomplete="off" required>
+                        </label>
+                        <label class="form-control" x-show="!cofre.configurado">
+                            <span class="label-text text-xs mb-1">Confirmar senha-mestra</span>
+                            <input type="password" class="input input-bordered input-sm" x-model="form.senha_mestra_confirma" autocomplete="off">
+                        </label>
+                        <template x-if="erro">
+                            <div class="alert alert-error py-2 text-xs" x-text="erro"></div>
+                        </template>
+                        <div class="modal-action">
+                            <button type="button" class="btn btn-sm btn-ghost" @click="fechar()">Cancelar</button>
+                            <button type="submit" class="btn btn-sm btn-primary" :disabled="busy">
+                                <span x-show="busy" class="loading loading-spinner loading-xs"></span>
+                                Salvar
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-backdrop" @click="fechar()"></div>
+            </div>
+
+            <!-- Modal: desbloquear -->
+            <div class="modal" :class="{'modal-open': modal==='unlock'}">
+                <div class="modal-box max-w-sm">
+                    <h3 class="font-bold text-lg mb-3">Desbloquear cofre</h3>
+                    <p class="text-xs text-base-content/60 mb-3">Digite a senha-mestra para liberar o acesso ao SISDPU nesta sessão.</p>
+                    <form @submit.prevent="desbloquear()" class="flex flex-col gap-3">
+                        <input type="password" class="input input-bordered input-sm" placeholder="senha-mestra"
+                               x-model="form.senha_mestra_unlock" autocomplete="current-password" required>
+                        <template x-if="erro">
+                            <div class="alert alert-error py-2 text-xs" x-text="erro"></div>
+                        </template>
+                        <div class="modal-action">
+                            <button type="button" class="btn btn-sm btn-ghost" @click="fechar()">Cancelar</button>
+                            <button type="submit" class="btn btn-sm btn-primary" :disabled="busy">
+                                <span x-show="busy" class="loading loading-spinner loading-xs"></span>
+                                Desbloquear
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-backdrop" @click="fechar()"></div>
+            </div>
+
+            <!-- Modal: trocar senha-mestra -->
+            <div class="modal" :class="{'modal-open': modal==='trocar'}">
+                <div class="modal-box max-w-sm">
+                    <h3 class="font-bold text-lg mb-3">Trocar senha-mestra</h3>
+                    <p class="text-xs text-base-content/60 mb-3">Re-cifra o cofre inteiro com uma nova senha-mestra.</p>
+                    <form @submit.prevent="trocarSenha()" class="flex flex-col gap-3">
+                        <input type="password" class="input input-bordered input-sm" placeholder="senha-mestra atual"
+                               x-model="form.senha_atual" autocomplete="off" required>
+                        <input type="password" class="input input-bordered input-sm" placeholder="nova senha-mestra (mín. 6)"
+                               x-model="form.senha_nova" autocomplete="off" required>
+                        <input type="password" class="input input-bordered input-sm" placeholder="confirmar nova senha-mestra"
+                               x-model="form.senha_nova_confirma" autocomplete="off" required>
+                        <template x-if="erro">
+                            <div class="alert alert-error py-2 text-xs" x-text="erro"></div>
+                        </template>
+                        <div class="modal-action">
+                            <button type="button" class="btn btn-sm btn-ghost" @click="fechar()">Cancelar</button>
+                            <button type="submit" class="btn btn-sm btn-primary" :disabled="busy">
+                                <span x-show="busy" class="loading loading-spinner loading-xs"></span>
+                                Trocar
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-backdrop" @click="fechar()"></div>
+            </div>
+
+            <!-- Modal: remover credencial de um sistema -->
+            <div class="modal" :class="{'modal-open': modal==='remover'}">
+                <div class="modal-box max-w-sm">
+                    <h3 class="font-bold text-lg mb-3">Remover credencial — <span x-text="rotuloDe(form.sistema)"></span></h3>
+                    <p class="text-xs text-base-content/60 mb-3">Confirme com a senha-mestra. Os demais sistemas do cofre são mantidos.</p>
+                    <form @submit.prevent="removerSistema()" class="flex flex-col gap-3">
+                        <input type="password" class="input input-bordered input-sm" placeholder="senha-mestra"
+                               x-model="form.senha_mestra_rm" autocomplete="off" required>
+                        <template x-if="erro">
+                            <div class="alert alert-error py-2 text-xs" x-text="erro"></div>
+                        </template>
+                        <div class="modal-action">
+                            <button type="button" class="btn btn-sm btn-ghost" @click="fechar()">Cancelar</button>
+                            <button type="submit" class="btn btn-sm btn-error" :disabled="busy">
+                                <span x-show="busy" class="loading loading-spinner loading-xs"></span>
+                                Remover
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-backdrop" @click="fechar()"></div>
+            </div>
+        </div>
+    </div>
+
+    <div x-data="satCentralDefaults()" x-init="init()" class="space-y-6">
+
+    <p class="text-sm text-base-content/60">
+        Valores padrão pré-carregados nos controles da aba <strong>Arquivos SAT Central</strong>
+        (também podem ser ajustados pontualmente lá, em cada operação).
+    </p>
+
+    <div class="card bg-base-100 border border-base-300">
+        <div class="card-body gap-5">
+            <!-- Caixa de tramitação padrão -->
+            <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <p class="font-medium">Caixa de tramitação</p>
+                    <p class="text-sm text-base-content/60 mt-0.5">Caixa de grupo selecionada por padrão em "Tramitar para".</p>
+                </div>
+                <div class="flex flex-col items-end gap-1.5 shrink-0">
+                    <input type="text" class="input input-bordered input-sm w-64" x-model="caixa"
+                           placeholder="Ex.: 01 - PREV_DIVPREV">
+                    <div class="flex items-center gap-2">
+                        <select class="select select-bordered select-sm w-64" x-model="caixa" x-show="grupos.length">
+                            <template x-for="g in grupos" :key="g"><option :value="g" x-text="g"></option></template>
+                        </select>
+                        <button class="btn btn-sm btn-ghost" @click="carregarGrupos()" :disabled="carregando" title="Consulta o SISDPU">
+                            <span x-show="carregando" class="loading loading-spinner loading-xs"></span>
+                            <span x-text="grupos.length ? 'Recarregar caixas' : 'Carregar caixas'"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Prazo da tramitação -->
+            <div class="flex items-start justify-between gap-4 pt-2 border-t border-base-300">
+                <div>
+                    <p class="font-medium">Prazo da tramitação</p>
+                    <p class="text-sm text-base-content/60 mt-0.5">Prazo de conclusão aplicado por padrão na tramitação.</p>
+                </div>
+                <div class="flex items-center gap-4 shrink-0">
+                    <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                        <input type="radio" class="sat-cfg-radio" :checked="prazoModo==='sem_prazo'" @change="prazoModo='sem_prazo'">
+                        sem prazo
+                    </label>
+                    <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                        <input type="radio" class="sat-cfg-radio" :checked="prazoModo==='dias'" @change="prazoModo='dias'">
+                        em
+                        <input type="number" min="1" max="365" class="input input-bordered input-sm w-20"
+                               x-model.number="prazoDias" @focus="prazoModo='dias'">
+                        dias
+                    </label>
+                </div>
+            </div>
+
+            <!-- Tempo entre consultas -->
+            <div class="flex items-start justify-between gap-4 pt-2 border-t border-base-300">
+                <div>
+                    <p class="font-medium">Tempo entre consultas</p>
+                    <p class="text-sm text-base-content/60 mt-0.5">Pausa preventiva entre cada consulta ao SAT, para reduzir o bloqueio anti-robô.</p>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <input type="number" min="0" max="60" step="1" class="input input-bordered input-sm w-20" x-model.number="tempoEntre">
+                    <span class="text-sm text-base-content/50">s</span>
+                </div>
+            </div>
+
+            <!-- Espera após bloqueio -->
+            <div class="flex items-start justify-between gap-4 pt-2 border-t border-base-300">
+                <div>
+                    <p class="font-medium">Tempo de espera após bloqueio</p>
+                    <p class="text-sm text-base-content/60 mt-0.5">Quanto esperar ao detectar a proteção antirobô, antes de re-tentar o documento.</p>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <input type="number" min="0" max="300" step="5" class="input input-bordered input-sm w-20" x-model.number="esperaBloqueio">
+                    <span class="text-sm text-base-content/50">s</span>
+                </div>
+            </div>
+
+            <!-- Compilar documentos por tipo -->
+            <div class="flex items-start justify-between gap-4 pt-2 border-t border-base-300">
+                <div>
+                    <p class="font-medium">Compilar documentos por tipo</p>
+                    <p class="text-sm text-base-content/60 mt-0.5">
+                        Quando houver mais que o limiar de documentos de um mesmo tipo (Carta de Concessão, CRER,
+                        Laudo Médico, Laudo de Avaliação Social, Histórico de Empréstimos Consignados), o painel os une
+                        num único PDF por tipo, em ordem de NB decrescente — reduzindo os anexos da movimentação.
+                    </p>
+                </div>
+                <div class="flex items-center gap-3 shrink-0">
+                    <label class="flex items-center gap-1.5 text-sm">
+                        <span class="text-base-content/60">acima de</span>
+                        <input type="number" min="1" max="50" class="input input-bordered input-sm w-16"
+                               x-model.number="compilarLimiar" :disabled="!compilar">
+                        <span class="text-base-content/60">docs</span>
+                    </label>
+                    <input type="checkbox" class="toggle toggle-primary shrink-0" :checked="compilar"
+                           @change="compilar = $event.target.checked">
+                </div>
+            </div>
+
+            <div class="flex items-center gap-4 pt-2 border-t border-base-300">
+                <button class="btn btn-primary btn-sm" :disabled="salvando" @click="salvar()">
+                    <span x-show="salvando" class="loading loading-spinner loading-xs"></span>
+                    Salvar padrões
+                </button>
+                <p class="text-sm" :class="msgErro?'text-error':'text-success'" x-text="msg" x-show="msg"></p>
+            </div>
+        </div>
+    </div>
+
+    </div><!-- /x-data satCentralDefaults -->
+
+    <!-- Tipos de documentos a baixar (por pretensão) -->
+    <div class="card bg-base-100 border border-base-300" x-data="tiposDocumentos()" x-init="init()">
+        <div class="card-body gap-4">
+            <h3 class="text-lg font-semibold text-base-content/80 border-b border-base-300 pb-2">
+                Tipos de documentos a baixar
+            </h3>
+            <p class="text-sm text-base-content/60">
+                Escolha quais documentos o download traz, por pretensão. Sem configuração para uma
+                pretensão, vale o "Padrão"; sem pretensão informada no PAJ, também vale o "Padrão".
+            </p>
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-medium">Pretensão:</span>
+                <select class="select select-bordered select-sm" x-model="pretSel" @change="onPretChange()">
+                    <option value="__padrao__">Padrão (todas as outras)</option>
+                    <option value="__instituidor__">◆ Instituidor (pensão por morte / auxílio-reclusão)</option>
+                    <template x-for="pr in pretensoes" :key="pr"><option :value="pr" x-text="pr"></option></template>
+                </select>
+                <span class="mx-1 text-base-content/30">|</span>
+                <button class="btn btn-xs btn-ghost" @click="marcarTodos(true)">Marcar todos</button>
+                <button class="btn btn-xs btn-ghost" @click="marcarTodos(false)">Limpar</button>
+                <span class="text-xs text-base-content/50 ml-auto" x-text="sel.length + '/' + catalogo.length + ' marcados'"></span>
+            </div>
+            <div class="max-h-[340px] overflow-y-auto space-y-3 pr-1">
+                <template x-for="grupo in grupos()" :key="grupo">
+                    <div>
+                        <div class="text-xs font-semibold text-base-content/60 mb-1" x-text="grupo"></div>
+                        <template x-for="t in doGrupo(grupo)" :key="t.key">
+                            <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+                                <input type="checkbox" class="checkbox checkbox-sm" :value="t.key" x-model="sel">
+                                <span x-text="t.label"></span>
+                            </label>
+                        </template>
+                    </div>
+                </template>
+            </div>
+            <div class="flex items-center gap-4 pt-2 border-t border-base-300">
+                <button class="btn btn-primary btn-sm" @click="salvar()">Salvar</button>
+                <p class="text-sm" :class="msgErro?'text-error':'text-success'" x-text="msg" x-show="msg"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PAT a ignorar -->
+    <div class="card bg-base-100 border border-base-300" x-data="patIgnorar()" x-init="init()">
+        <div class="card-body gap-4">
+            <h3 class="text-lg font-semibold text-base-content/80 border-b border-base-300 pb-2">
+                Processos administrativos (PAT) a ignorar
+            </h3>
+            <p class="text-sm text-base-content/60">
+                Espécies de processo administrativo (coluna <strong>Serviço</strong> do PAT) que
+                <strong>não devem ser baixadas</strong>. A comparação ignora acentos e maiúsculas
+                (casa por trecho). Vá cadastrando novas espécies conforme forem surgindo.
+            </p>
+            <div class="flex items-center gap-2">
+                <input type="text" class="input input-bordered input-sm flex-1" x-model="novo"
+                       placeholder="ex.: Alterar Local ou Forma de Pagamento" @keydown.enter="add()">
+                <button class="btn btn-sm btn-primary" :disabled="!novo.trim()" @click="add()">Adicionar</button>
+            </div>
+            <div class="max-h-[300px] overflow-y-auto space-y-1 pr-1">
+                <template x-for="(t, i) in itens" :key="i">
+                    <div class="flex items-center gap-2 text-sm py-0.5 border-b border-base-300">
+                        <span class="flex-1" x-text="t"></span>
+                        <button class="btn btn-ghost btn-xs text-error px-1" @click="del(i)" title="Remover">✕</button>
+                    </div>
+                </template>
+                <div x-show="itens.length === 0" class="text-sm text-base-content/40 py-2">Nenhuma espécie ignorada.</div>
+            </div>
+            <div class="flex items-center gap-4 pt-2 border-t border-base-300">
+                <button class="btn btn-primary btn-sm" @click="salvar()">Salvar</button>
+                <p class="text-sm" :class="msgErro?'text-error':'text-success'" x-text="msg" x-show="msg"></p>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+/* Radios nativos com o acento Fluent (igual aos da aba Arquivos SAT) */
+.sat-cfg-radio {
+    appearance: auto;
+    -webkit-appearance: radio;
+    accent-color: var(--accent);
+    width: 15px; height: 15px;
+    margin: 0; cursor: pointer; vertical-align: middle;
+}
+.tema-seg {
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 10px;
+    background: var(--fallback-b2, oklch(var(--b2)/1));
+    border: 1px solid var(--fallback-bc, oklch(var(--bc)/0.2));
+}
+.tema-seg button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--fallback-bc, oklch(var(--bc)/0.7));
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+.tema-seg button svg {
+    width: 17px;
+    height: 17px;
+}
+.tema-seg button:hover {
+    color: var(--fallback-bc, oklch(var(--bc)/1));
+}
+.tema-seg button.ativo {
+    background: var(--accent);
+    color: var(--accent-fg);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+</style>
+<script>
+// Definir tema (Sistema / Claro / Escuro) — salvo neste navegador
+function definirTema(t) {
+    try { localStorage.setItem('painel-tema', t); } catch(e){}
+    document.documentElement.setAttribute('data-theme', t);
+    temaMarcarAtivo(t);
+}
+
+function temaMarcarAtivo(t) {
+    document.querySelectorAll('#tema-seg button').forEach(b => {
+        b.classList.toggle('ativo', b.dataset.tema === t);
+    });
+}
+
+// Restaurar tema ao carregar a página
+(function() {
+    let t = 'system';
+    try { t = localStorage.getItem('painel-tema') || 'system'; } catch(e){}
+    temaMarcarAtivo(t);
+})();
+
+// Cofre de credenciais (senha-mestra única — hoje só protege o SISDPU)
+function cofreAcesso() {
+    return {
+        cofre: { configurado: false, destrancado: false },
+        sistemas: [],  // [{chave, rotulo, tem_credencial, usuario}]
+        modal: '',     // '' | 'cad' | 'unlock' | 'trocar' | 'remover'
+        busy: false, erro: '',
+        form: {
+            sistema: '', usuario: '', senha: '', senha_mestra: '', senha_mestra_confirma: '',
+            senha_mestra_unlock: '', senha_atual: '', senha_nova: '', senha_nova_confirma: '',
+            senha_mestra_rm: '',
+        },
+
+        async init() { await this.carregar(); },
+
+        async carregar() {
+            try {
+                const r = await (await fetch('/api/cofre/status')).json();
+                this.cofre = { configurado: !!r.configurado, destrancado: !!r.destrancado };
+                const sis = r.sistemas || {};
+                this.sistemas = Object.keys(sis).map(k => ({
+                    chave: k, rotulo: sis[k].rotulo || k,
+                    tem_credencial: !!sis[k].tem_credencial, usuario: sis[k].usuario || '',
+                }));
+            } catch (e) {}
+            if (window.atualizarSelos) window.atualizarSelos();
+        },
+
+        rotuloDe(chave) {
+            const s = this.sistemas.find(x => x.chave === chave);
+            return s ? s.rotulo : chave;
+        },
+
+        _limparForm() {
+            this.form.usuario = ''; this.form.senha = '';
+            this.form.senha_mestra = ''; this.form.senha_mestra_confirma = '';
+            this.form.senha_mestra_unlock = ''; this.form.senha_atual = '';
+            this.form.senha_nova = ''; this.form.senha_nova_confirma = ''; this.form.senha_mestra_rm = '';
+        },
+        abrirCad(chave) {
+            this.erro = ''; this._limparForm(); this.form.sistema = chave;
+            const s = this.sistemas.find(x => x.chave === chave);
+            if (s && s.tem_credencial) this.form.usuario = s.usuario || '';
+            this.modal = 'cad';
+        },
+        abrirUnlock() { this.erro = ''; this._limparForm(); this.modal = 'unlock'; },
+        abrirTrocar() { this.erro = ''; this._limparForm(); this.modal = 'trocar'; },
+        abrirRemover(chave) { this.erro = ''; this._limparForm(); this.form.sistema = chave; this.modal = 'remover'; },
+        fechar() { this.modal = ''; },
+
+        async salvarCredenciais() {
+            this.busy = true; this.erro = '';
+            try {
+                const r = await fetch('/api/cofre/credenciais', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sistema: this.form.sistema, usuario: this.form.usuario, senha: this.form.senha,
+                        senha_mestra: this.form.senha_mestra, senha_mestra_confirma: this.form.senha_mestra_confirma,
+                    }),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok || !d.ok) { this.erro = d.erro || 'Erro ao salvar.'; return; }
+                this.fechar(); await this.carregar();
+            } catch (e) { this.erro = 'Falha de rede ao salvar.'; }
+            finally { this.busy = false; }
+        },
+        async desbloquear() {
+            this.busy = true; this.erro = '';
+            try {
+                const r = await fetch('/api/cofre/desbloquear', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ senha_mestra: this.form.senha_mestra_unlock }),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok || !d.ok) { this.erro = d.erro || 'Senha-mestra incorreta.'; return; }
+                this.fechar(); await this.carregar();
+            } catch (e) { this.erro = 'Falha de rede ao desbloquear.'; }
+            finally { this.busy = false; }
+        },
+        async trocarSenha() {
+            this.busy = true; this.erro = '';
+            try {
+                const r = await fetch('/api/cofre/trocar-senha', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        senha_atual: this.form.senha_atual, senha_nova: this.form.senha_nova,
+                        senha_nova_confirma: this.form.senha_nova_confirma,
+                    }),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok || !d.ok) { this.erro = d.erro || 'Erro ao trocar a senha-mestra.'; return; }
+                this.fechar(); await this.carregar();
+            } catch (e) { this.erro = 'Falha de rede.'; }
+            finally { this.busy = false; }
+        },
+        async bloquear() {
+            try { await fetch('/api/cofre/bloquear', { method: 'POST' }); } catch (e) {}
+            await this.carregar();
+        },
+        async removerSistema() {
+            this.busy = true; this.erro = '';
+            try {
+                const r = await fetch('/api/cofre/credenciais/' + encodeURIComponent(this.form.sistema), {
+                    method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ senha_mestra: this.form.senha_mestra_rm }),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok || !d.ok) { this.erro = d.erro || 'Erro ao remover.'; return; }
+                this.fechar(); await this.carregar();
+            } catch (e) { this.erro = 'Falha de rede.'; }
+            finally { this.busy = false; }
+        },
+    };
+}
+
+// Valores padrão da aba "Arquivos SAT Central" (caixa de tramitação padrão, prazo,
+// ritmo antirrobô e compilação por tipo).
+function satCentralDefaults() {
+    return {
+        caixa: '01 - PREV_DIVPREV', prazoModo: 'sem_prazo', prazoDias: 15,
+        tempoEntre: 5, esperaBloqueio: 45, compilar: true, compilarLimiar: 3,
+        grupos: [], carregando: false, salvando: false, msg: '', msgErro: false,
+        async init() {
+            try {
+                const r = await (await fetch('/api/config/sat-central')).json();
+                this.caixa = r.caixa || this.caixa;
+                this.prazoModo = r.prazo_modo || 'sem_prazo';
+                if (r.prazo_dias) this.prazoDias = r.prazo_dias;
+                if (typeof r.tempo_entre === 'number') this.tempoEntre = r.tempo_entre;
+                if (typeof r.espera_bloqueio === 'number') this.esperaBloqueio = r.espera_bloqueio;
+                if (typeof r.compilar === 'boolean') this.compilar = r.compilar;
+                if (r.compilar_limiar) this.compilarLimiar = r.compilar_limiar;
+            } catch (e) {}
+        },
+        async carregarGrupos() {
+            this.carregando = true;
+            try {
+                const g = await (await fetch('/api/sat/grupos')).json();
+                this.grupos = g.grupos || [];
+                if (!this.grupos.length) this._msg('Nenhuma caixa retornada (verifique a sessão do SISDPU e se há ao menos um PAJ cadastrado).', true);
+            } catch (e) { this._msg('Erro ao consultar as caixas.', true); }
+            finally { this.carregando = false; }
+        },
+        async salvar() {
+            this.salvando = true;
+            try {
+                const r = await (await fetch('/api/config/sat-central', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        caixa: this.caixa, prazo_modo: this.prazoModo, prazo_dias: this.prazoDias,
+                        tempo_entre: this.tempoEntre, espera_bloqueio: this.esperaBloqueio,
+                        compilar: this.compilar, compilar_limiar: this.compilarLimiar,
+                    })})).json();
+                if (r.ok) {
+                    const d = r.defaults || {};
+                    this.caixa = d.caixa || this.caixa;
+                    this.prazoModo = d.prazo_modo || this.prazoModo;
+                    this.prazoDias = d.prazo_dias || this.prazoDias;
+                    this.tempoEntre = (typeof d.tempo_entre === 'number') ? d.tempo_entre : this.tempoEntre;
+                    this.esperaBloqueio = (typeof d.espera_bloqueio === 'number') ? d.espera_bloqueio : this.esperaBloqueio;
+                    if (typeof d.compilar === 'boolean') this.compilar = d.compilar;
+                    if (d.compilar_limiar) this.compilarLimiar = d.compilar_limiar;
+                    this._msg('Padrões salvos.', false);
+                } else { this._msg('Erro ao salvar.', true); }
+            } catch (e) { this._msg('Erro de comunicação.', true); }
+            finally { this.salvando = false; }
+        },
+        _msg(m, err) { this.msg = m; this.msgErro = err; setTimeout(() => this.msg = '', 3500); },
+    };
+}
+
+// Tipos de documentos a baixar, por pretensão (catálogo do SAT + seleção salva).
+// Todas as pretensões previdenciárias cadastradas no SISDPU — para poder
+// pré-configurar o que baixar de cada uma antes mesmo de haver um PAJ com
+// aquela pretensão cadastrado no painel.
+const TODAS_PRETENSOES_SISDPU = [
+    'APOSENTADORIA DA PESSOA COM DEFICIÊNCIA',
+    'APOSENTADORIA POR IDADE',
+    'APOSENTADORIA POR INVALIDEZ (APOSENTADORIA POR INCAPACIDADE PERMANENTE)',
+    'APOSENTADORIA POR TEMPO DE CONTRIBUIÇÃO',
+    'AUXÍLIO-ACIDENTE',
+    'AUXÍLIO-DOENÇA (BENEFÍCIO POR INCAPACIDADE TEMPORÁRIA)',
+    'AUXÍLIO-RECLUSÃO',
+    'BENEFICIOS SOCIAIS',
+    'BPC - AUXÍLIO INCLUSÃO',
+    'BPC - BENEFÍCIO ASSISTENCIAL',
+    'PENSÃO POR MORTE',
+    'REABILITAÇÃO PROFISSIONAL',
+    'RESTITUIÇÃO/COBRANÇA - BENEFÍCIO PREVIDENCIÁRIO RECEBIDO PELO(A) ASSISTIDO(A)',
+    'SALÁRIO-MATERNIDADE',
+];
+
+function tiposDocumentos() {
+    return {
+        catalogo: [], padrao: null, porPretensao: {}, instituidor: null, instituidorDefault: [],
+        pretensoes: [], pretSel: '__padrao__', sel: [], msg: '', msgErro: false,
+
+        async init() {
+            try {
+                const j = await (await fetch('/api/sat/tipos')).json();
+                this.catalogo = j.tipos || [];
+                this.padrao = (j.padrao === undefined ? null : j.padrao);
+                this.porPretensao = j.por_pretensao || {};
+                this.instituidor = (j.instituidor === undefined ? null : j.instituidor);
+                this.instituidorDefault = j.instituidor_default || [];
+            } catch (e) {}
+            // Lista de pretensões: TODAS as previdenciárias do SISDPU (permite pré-
+            // configurar antes de haver PAJ) + as já configuradas + as dos PAJs cadastrados
+            // (cobre eventual pretensão fora da lista fixa).
+            const set = new Set(TODAS_PRETENSOES_SISDPU);
+            Object.keys(this.porPretensao).forEach(p => set.add(p));
+            try {
+                const p = await (await fetch('/api/sat/pendentes/manuais')).json();
+                (p.itens || []).forEach(it => { if (it.pretensao) set.add(it.pretensao); });
+            } catch (e) {}
+            this.pretensoes = [...set].sort();
+            this.sel = this._keysParaPret('__padrao__');
+        },
+        grupos() {
+            const g = []; this.catalogo.forEach(t => { if (!g.includes(t.grupo)) g.push(t.grupo); }); return g;
+        },
+        doGrupo(g) { return this.catalogo.filter(t => t.grupo === g); },
+        _keysParaPret(pret) {
+            if (pret === '__instituidor__') {
+                return this.instituidor ? [...this.instituidor] : [...this.instituidorDefault];
+            }
+            if (pret !== '__padrao__' && this.porPretensao[pret]) return [...this.porPretensao[pret]];
+            return this.padrao === null ? this.catalogo.map(t => t.key) : [...this.padrao];
+        },
+        onPretChange() { this.sel = this._keysParaPret(this.pretSel); },
+        marcarTodos(marcar) { this.sel = marcar ? this.catalogo.map(t => t.key) : []; },
+        async salvar() {
+            try {
+                const j = await (await fetch('/api/sat/tipos', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pretensao: this.pretSel, keys: this.sel })
+                })).json();
+                if (j.ok) {
+                    this.padrao = (j.padrao === undefined ? null : j.padrao);
+                    this.porPretensao = j.por_pretensao || {};
+                    if (j.instituidor !== undefined) this.instituidor = j.instituidor;
+                    this.msg = 'Salvo ✓'; this.msgErro = false;
+                } else { this.msg = 'Falha ao salvar'; this.msgErro = true; }
+            } catch (e) { this.msg = 'Falha ao salvar'; this.msgErro = true; }
+            clearTimeout(this._t); this._t = setTimeout(() => { this.msg = ''; }, 2500);
+        },
+    };
+}
+
+// Espécies de processo administrativo (PAT) a ignorar (não baixar).
+function patIgnorar() {
+    return {
+        itens: [], novo: '', msg: '', msgErro: false,
+
+        async init() {
+            try { this.itens = (await (await fetch('/api/sat/pat-ignorar')).json()).itens || []; } catch (e) {}
+        },
+        add() {
+            const v = this.novo.trim(); if (!v) return;
+            if (!this.itens.some(x => x.toLowerCase() === v.toLowerCase())) this.itens.push(v);
+            this.novo = '';
+        },
+        del(i) { this.itens.splice(i, 1); },
+        async salvar() {
+            try {
+                const j = await (await fetch('/api/sat/pat-ignorar', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ itens: this.itens })
+                })).json();
+                if (j.ok) { this.itens = j.itens || []; this.msg = 'Salvo ✓'; this.msgErro = false; }
+                else { this.msg = 'Falha ao salvar'; this.msgErro = true; }
+            } catch (e) { this.msg = 'Falha ao salvar'; this.msgErro = true; }
+            clearTimeout(this._t); this._t = setTimeout(() => { this.msg = ''; }, 2500);
+        },
+    };
+}
+</script>
+{% endblock %}
