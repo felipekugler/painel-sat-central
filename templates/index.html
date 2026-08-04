@@ -715,6 +715,11 @@ function satPage() {
                 this.pendentes = j.itens || [];
             } catch (e) { this.pendentes = []; }
             finally { this.carregando = false; }
+            // rede de segurança: qualquer tabela de documentos já aberta na tela é
+            // atualizada junto, para nenhuma atividade deixar a tela desatualizada.
+            Object.keys(this.docsAbertos).forEach(pn => {
+                if (this.docsAbertos[pn]) this.carregarArquivos({ paj_norm: pn });
+            });
         },
         async carregarTipos() {
             try {
@@ -761,7 +766,8 @@ function satPage() {
                 let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
                 this.sseStatus = res.ok ? '— concluído ✓' : '— com aviso';
                 this.sseFechavel = true; this.rodando = false; es.close(); this._es = null;
-                if (res && Array.isArray(res.salvos) && res.salvos.length) p.n_instituidor = res.salvos.length;
+                this.carregarPendentes();
+                this.refrescarDocsSeAberto(p.paj_norm);
             });
             es.onerror = () => {
                 this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
@@ -957,6 +963,7 @@ function satPage() {
             } finally {
                 this.sseFechavel = true; this.rodando = false;
                 if (this.bmModo === 'pendente') this.carregarPendentes(); else this.carregarHistorico();
+                this.refrescarDocsSeAberto(r.paj_norm);
             }
         },
         // Baixa os alvos de UM escopo e junta ao acervo (sem movimentação). Promise<baixou>.
@@ -1181,6 +1188,12 @@ function satPage() {
                 this.docsArquivos[p.paj_norm] = j.arquivos || [];
             } catch (e) { this.docsArquivos[p.paj_norm] = []; }
         },
+        // Chamar sempre que uma atividade (download, anexação, exclusão…) terminar para um
+        // PAJ: se a tabela de documentos dele estiver aberta na tela, atualiza sem precisar
+        // fechar/reabrir. Não faz nada se a tabela estiver fechada (evita chamadas à toa).
+        async refrescarDocsSeAberto(paj_norm) {
+            if (this.docsAbertos[paj_norm]) await this.carregarArquivos({ paj_norm });
+        },
         async toggleDocs(p) {
             if (this.docsAbertos[p.paj_norm]) { this.docsAbertos[p.paj_norm] = false; return; }
             await this.carregarArquivos(p);
@@ -1251,6 +1264,7 @@ function satPage() {
                     this.logsDownload[p.paj_norm] = this.sseLog.slice();
                     this.carregarHistorico();
                     this.carregarPendentes();
+                    this.refrescarDocsSeAberto(p.paj_norm);
                     resolve(res);
                 });
                 es.onerror = () => {
