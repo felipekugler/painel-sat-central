@@ -33,15 +33,17 @@ from services import historico_sat
 FASE_MOV = "Juntada de documento"
 TIPO_ARQUIVO = "Documentos do Assistido"
 MOV_DESCRICAO = "Juntada dos documentos obtidos junto ao SAT Central (INSS/Dataprev)"
-MOV_DESCRICAO_INSTITUIDOR = ("Juntada dos documentos do INSTITUIDOR obtidos junto ao SAT "
-                             "Central (INSS/Dataprev)")
 MOV_DESCRICAO_COMPLEMENTAR = ("Juntada complementar de documentos obtidos junto ao SAT "
                               "Central (INSS/Dataprev)")
 TRAM_DESCRICAO = "Documentos do SAT Central juntados ao PAJ"
 GRUPO_PADRAO = "01 - PREV_DIVPREV"
+# Sentinela de "grupo" que representa a opção "Não tramitar" (só movimenta/anexa
+# os documentos; pula a etapa de tramitação por completo).
+NAO_TRAMITAR = "__nao_tramitar__"
 SUBPASTA_SAT = "Arquivos SAT"
 SUBPASTA_INSTITUIDOR = "Instituidor"  # dentro de "Arquivos SAT" (download/anexação à parte)
-SUBPASTA_COMPLEMENTAR = "Complementar"  # download complementar (anexado por movimentação)
+SUBPASTA_COMPLEMENTAR = "Complementar"  # download complementar do assistido (anexado por movimentação)
+SUBPASTA_COMPLEMENTAR_INSTITUIDOR = "Complementar Instituidor"  # idem, do instituidor
 # Originais dos PDFs compilados por tipo (espelha sat_client.SUBPASTA_ORIGINAIS_COMPILADOS).
 # Ficam fora da anexação; apagados só APÓS a conclusão da tramitação (ver processar_paj_stream).
 SUBPASTA_ORIGINAIS_COMPILADOS = "Compilados (originais)"
@@ -270,10 +272,13 @@ def _pat_servico_map(d: dict) -> dict:
     return mapa
 
 
-def inventario_paj(paj_norm: str) -> dict:
+def inventario_paj(paj_norm: str, escopo: str = "assistido") -> dict:
     """Inventário dos documentos revelados no SAT (1º download) + marcas ja_baixado /
-    ja_anexado. Usa `inventario` do log (novos) ou reconstrói de salvos/pulados (antigos)."""
-    log_p = pasta_arquivos_sat(paj_norm) / "_log_download.json"
+    ja_anexado. Usa `inventario` do log (novos) ou reconstrói de salvos/pulados (antigos).
+    `escopo` = 'assistido' (pasta principal) ou 'instituidor' (subpasta 'Instituidor')."""
+    paths = _escopo_paths(paj_norm, escopo)
+    pasta_base, listar_escopo = paths["destino"], paths["listar"]
+    log_p = pasta_base / "_log_download.json"
     cpf, inv, pat_serv = "", [], {}
     if os.path.isfile(str(log_p)):
         try:
@@ -283,23 +288,40 @@ def inventario_paj(paj_norm: str) -> dict:
             pat_serv = _pat_servico_map(d)  # {protocolo: serviço} p/ rótulo do PAT
         except Exception:  # noqa: BLE001
             inv = []
-    if not cpf:
+    if not cpf and escopo == "assistido":
         cpf = _cpf_do_paj(paj_norm)
-    if not cpf:
+    if not cpf and escopo == "assistido":
         mp = next((m for m in _ler_pajs_manuais() if m.get("paj_norm") == paj_norm), None)
         cpf = (mp or {}).get("cpf", "")
-    # já anexados: nomes em QUALQUER registro do histórico deste PAJ
-    anexados: set[str] = set()
+    # já anexados: nome -> conjunto de movs em que foi anexado, fazendo MERGE de todas as
+    # anexações registradas neste PAJ (movimentação principal + cada "anexar mais").
+    anexado_movs: dict[str, set] = {}
     for r in historico_sat.listar():
-        if r.get("paj_norm") == paj_norm:
-            for a in (r.get("arquivos") or []):
-                anexados.add(a)
+        if r.get("paj_norm") != paj_norm:
+            continue
+        for a in (r.get("arquivos") or []):
+            anexado_movs.setdefault(a, set()).add(r.get("mov_seq"))
+        for m in (r.get("movs_extra") or []):
+            for a in (m.get("arquivos") or []):
+                anexado_movs.setdefault(a, set()).add(m.get("seq"))
+    anexados: set[str] = set(anexado_movs.keys())
     # já baixados: arquivos presentes nas pastas (principal + instituidor + complementar)
     baixados: set[str] = set()
     for lst in (listar_arquivos_sat(paj_norm), listar_arquivos_instituidor(paj_norm),
                 listar_arquivos_complementar(paj_norm)):
         for a in lst:
             baixados.add(a["nome"])
+    # GROUND TRUTH (auto-reparo): todo PDF presente na pasta do escopo FOI baixado. Injeta
+    # itens "baixado" a partir dos arquivos no disco — assim, se um merge antigo tiver
+    # rebaixado um item para "nao_selecionado", o dedup abaixo (baixado vence) o recupera.
+    for a in listar_escopo(paj_norm):
+        nome_a = a["nome"]
+        key_a = _key_de_texto(nome_a)
+        if not key_a:
+            continue
+        sub_a = _sub_de_texto(nome_a, key_a)
+        inv.append({"key": key_a, "sub": sub_a, "nome": nome_a, "status": "baixado",
+                    "rotulo": (pat_serv.get(sub_a, "") if key_a == "pat" else "")})
     # dedup por (key, sub) — a paginação do PAT pode revelar o mesmo protocolo 2x; itens
     # duplicados quebravam o x-for do "Baixar mais" (chave repetida). Preferência de status:
     # baixado > qualquer outro (mantém o registro mais informativo).
@@ -330,6 +352,7 @@ def inventario_paj(paj_norm: str) -> dict:
             "status": it.get("status", ""),
             "ja_baixado": bool(it.get("status") == "baixado" and (not nome or nome in baixados)),
             "ja_anexado": bool(nome and nome in anexados),
+            "anexado_movs": sorted(s for s in anexado_movs.get(nome, set()) if s is not None),
         })
     return {"paj_norm": paj_norm, "cpf": cpf, "itens": itens}
 
@@ -355,25 +378,83 @@ def listar_arquivos_complementar(paj_norm: str) -> list[dict]:
 
 
 def pasta_excluidos(paj_norm: str) -> Path:
-    """Subpasta-lixeira dos documentos removidos da lista (soft delete)."""
+    """Subpasta-lixeira dos documentos do ASSISTIDO removidos da lista (soft delete)."""
     return pasta_arquivos_sat(paj_norm) / "Excluídos"
 
 
+def pasta_excluidos_instituidor(paj_norm: str) -> Path:
+    """Lixeira dos documentos do INSTITUIDOR removidos (dentro de 'Instituidor')."""
+    return pasta_instituidor(paj_norm) / "Excluídos"
+
+
+def tem_instituidor(paj_norm: str) -> bool:
+    """Há instituidor neste PAJ? (subpasta 'Instituidor' com log de download ou PDFs)."""
+    pi = pasta_instituidor(paj_norm)
+    return bool((pi / "_log_download.json").exists() or listar_arquivos_instituidor(paj_norm))
+
+
+def _escopo_paths(paj_norm: str, escopo: str) -> dict:
+    """Resolve pastas/rótulo/listagem conforme o escopo ('assistido' | 'instituidor').
+    Assim o download/mescla complementar serve tanto o acervo do assistido (pasta principal)
+    quanto o do instituidor (subpasta 'Instituidor')."""
+    if escopo == "instituidor":
+        return {
+            "destino": pasta_instituidor(paj_norm),
+            "complementar": pasta_arquivos_sat(paj_norm) / SUBPASTA_COMPLEMENTAR_INSTITUIDOR,
+            "listar": listar_arquivos_instituidor,
+            "rotulo": "INSTITUIDOR - ",
+        }
+    return {
+        "destino": pasta_arquivos_sat(paj_norm),
+        "complementar": pasta_complementar(paj_norm),
+        "listar": listar_arquivos_sat,
+        "rotulo": "",
+    }
+
+
+def _cpf_de_log(pasta: Path) -> str:
+    """Lê o CPF gravado no _log_download.json de uma pasta de download (assistido/instituidor)."""
+    p = pasta / "_log_download.json"
+    if not os.path.isfile(str(p)):
+        return ""
+    try:
+        return (json.loads(p.read_text(encoding="utf-8")).get("cpf") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _referencia(escopo: str, cpf: str) -> str:
+    """Rótulo da coluna 'Referência': 'Assistido - CPF X' / 'Instituidor - CPF X'."""
+    quem = "Assistido" if escopo == "assistido" else "Instituidor"
+    return f"{quem} - CPF {cpf}" if cpf else quem
+
+
+def _listar_pdfs_pasta(pasta: Path, escopo: str, referencia: str, excluido: bool) -> list[dict]:
+    out: list[dict] = []
+    if not pasta.exists():
+        return out
+    for f in sorted(pasta.glob("*.pdf")):
+        try:
+            tam = f.stat().st_size
+        except Exception:  # noqa: BLE001
+            tam = 0
+        out.append({"nome": f.name, "caminho": str(f), "tipo": "pdf", "tamanho": tam,
+                    "excluido": excluido, "escopo": escopo, "referencia": referencia})
+    return out
+
+
 def listar_todos_arquivos_sat(paj_norm: str) -> list[dict]:
-    """Ativos (pasta principal, serão anexados) + excluídos (subpasta Excluídos),
-    cada um com flag `excluido`. Usado pela UI (accordion)."""
-    out = listar_arquivos_sat(paj_norm)  # só a pasta principal (não desce em subpastas)
-    for a in out:
-        a["excluido"] = False
-    exc = pasta_excluidos(paj_norm)
-    if exc.exists():
-        for f in sorted(exc.glob("*.pdf")):
-            try:
-                tam = f.stat().st_size
-            except Exception:  # noqa: BLE001
-                tam = 0
-            out.append({"nome": f.name, "caminho": str(f), "tipo": "pdf",
-                        "tamanho": tam, "excluido": True})
+    """Tabela UNIFICADA para a UI: documentos do ASSISTIDO (pasta principal) + do
+    INSTITUIDOR (subpasta 'Instituidor'), ativos e excluídos, cada um com `escopo`,
+    `referencia` ('Assistido/Instituidor - CPF X') e flag `excluido`."""
+    cpf_a = _cpf_do_paj(paj_norm) or _cpf_de_log(pasta_arquivos_sat(paj_norm))
+    cpf_i = _cpf_de_log(pasta_instituidor(paj_norm))
+    ref_a, ref_i = _referencia("assistido", cpf_a), _referencia("instituidor", cpf_i)
+    out: list[dict] = []
+    out += _listar_pdfs_pasta(pasta_arquivos_sat(paj_norm), "assistido", ref_a, False)
+    out += _listar_pdfs_pasta(pasta_instituidor(paj_norm), "instituidor", ref_i, False)
+    out += _listar_pdfs_pasta(pasta_excluidos(paj_norm), "assistido", ref_a, True)
+    out += _listar_pdfs_pasta(pasta_excluidos_instituidor(paj_norm), "instituidor", ref_i, True)
     return out
 
 
@@ -385,34 +466,40 @@ def _mover_pdf(origem: Path, destino_dir: Path) -> None:
     shutil.move(str(origem), str(destino))
 
 
-def excluir_arquivo_sat(paj_norm: str, nome: str) -> dict:
-    """SOFT DELETE: move o documento da pasta principal para 'Excluídos' (não some do
-    disco; sai da lista de anexação e pode ser recuperado). Anti path-traversal."""
-    pasta = pasta_arquivos_sat(paj_norm).resolve()
-    alvo = (pasta / Path(nome or "").name).resolve()
-    if pasta not in alvo.parents or not alvo.exists():
-        return {"ok": False, "detalhe": "Arquivo não encontrado.", "n_arquivos": len(listar_arquivos_sat(paj_norm))}
+def _contagens(paj_norm: str) -> dict:
+    return {"n_arquivos": len(listar_arquivos_sat(paj_norm)),
+            "n_instituidor": len(listar_arquivos_instituidor(paj_norm))}
+
+
+def excluir_arquivo_sat(paj_norm: str, nome: str, escopo: str = "assistido") -> dict:
+    """SOFT DELETE: move o documento (do assistido OU do instituidor, conforme `escopo`)
+    para a respectiva lixeira 'Excluídos'. Não some do disco; pode ser recuperado."""
+    inst = (escopo == "instituidor")
+    origem = (pasta_instituidor if inst else pasta_arquivos_sat)(paj_norm).resolve()
+    destino = pasta_excluidos_instituidor(paj_norm) if inst else pasta_excluidos(paj_norm)
+    alvo = (origem / Path(nome or "").name).resolve()
+    if origem not in alvo.parents or not alvo.exists():
+        return {"ok": False, "detalhe": "Arquivo não encontrado.", **_contagens(paj_norm)}
     try:
-        _mover_pdf(alvo, pasta_excluidos(paj_norm))
-        return {"ok": True, "detalhe": f"Removido da lista: {alvo.name}",
-                "n_arquivos": len(listar_arquivos_sat(paj_norm))}
+        _mover_pdf(alvo, destino)
+        return {"ok": True, "detalhe": f"Removido da lista: {alvo.name}", **_contagens(paj_norm)}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "detalhe": str(e), "n_arquivos": len(listar_arquivos_sat(paj_norm))}
+        return {"ok": False, "detalhe": str(e), **_contagens(paj_norm)}
 
 
-def recuperar_arquivo_sat(paj_norm: str, nome: str) -> dict:
-    """Traz o documento de volta de 'Excluídos' para a pasta principal (será anexado)."""
-    exc = pasta_excluidos(paj_norm).resolve()
+def recuperar_arquivo_sat(paj_norm: str, nome: str, escopo: str = "assistido") -> dict:
+    """Traz o documento de volta da lixeira para a pasta de origem (assistido/instituidor)."""
+    inst = (escopo == "instituidor")
+    exc = (pasta_excluidos_instituidor(paj_norm) if inst else pasta_excluidos(paj_norm)).resolve()
+    destino = pasta_instituidor(paj_norm) if inst else pasta_arquivos_sat(paj_norm)
     alvo = (exc / Path(nome or "").name).resolve()
     if exc not in alvo.parents or not alvo.exists():
-        return {"ok": False, "detalhe": "Arquivo não encontrado em Excluídos.",
-                "n_arquivos": len(listar_arquivos_sat(paj_norm))}
+        return {"ok": False, "detalhe": "Arquivo não encontrado em Excluídos.", **_contagens(paj_norm)}
     try:
-        _mover_pdf(alvo, pasta_arquivos_sat(paj_norm))
-        return {"ok": True, "detalhe": f"Recuperado: {alvo.name}",
-                "n_arquivos": len(listar_arquivos_sat(paj_norm))}
+        _mover_pdf(alvo, destino)
+        return {"ok": True, "detalhe": f"Recuperado: {alvo.name}", **_contagens(paj_norm)}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "detalhe": str(e), "n_arquivos": len(listar_arquivos_sat(paj_norm))}
+        return {"ok": False, "detalhe": str(e), **_contagens(paj_norm)}
 
 
 # ---------------------------------------------------------------------------
@@ -490,19 +577,25 @@ async def add_paj_manual(texto: str) -> dict:
     return {"ok": True, "item": item}
 
 
-def del_paj_manual(paj_norm: str) -> dict:
-    """Remove o PAJ da lista, apaga a pasta com os arquivos já baixados
-    (PAJS_DIR/<paj_norm>/) e registra a exclusão em "PAJs Trabalhados" —
-    ação irreversível, o front-end deve confirmar com o usuário antes de
-    chamar."""
+def del_paj_manual(paj_norm: str, apagar_arquivos: bool = True, registrar_historico: bool = True) -> dict:
+    """Remove o PAJ da lista. Por padrão (uso pelo botão ✕) TAMBÉM apaga a pasta
+    com os arquivos já baixados (PAJS_DIR/<paj_norm>/) e registra a exclusão em
+    "PAJs Trabalhados" — ação irreversível, o front-end deve confirmar com o
+    usuário antes de chamar com os padrões.
+
+    Uso interno (limpeza automática da lista após "Anexar ao PAJ" ter sucesso,
+    em processar_paj_stream) passa apagar_arquivos=False, registrar_historico=False:
+    os arquivos já foram anexados ao PAJ (não faz sentido apagá-los aqui) e o
+    próprio processamento já registrou seu resultado no histórico — registrar
+    de novo como "exclusão manual" seria enganoso."""
     lst = _ler_pajs_manuais()
     mp = next((x for x in lst if x.get("paj_norm") == paj_norm), None)
     _salvar_pajs_manuais([x for x in lst if x.get("paj_norm") != paj_norm])
     pasta = _pasta_paj(paj_norm)
     tinha_arquivos = pasta.exists()
-    if tinha_arquivos:
+    if apagar_arquivos and tinha_arquivos:
         shutil.rmtree(pasta, ignore_errors=True)
-    if mp:
+    if registrar_historico and mp:
         detalhe = ("PAJ removido manualmente da lista pelo usuário; os arquivos já "
                     "baixados do SAT foram excluídos." if tinha_arquivos else
                     "PAJ removido manualmente da lista pelo usuário (não havia arquivos baixados).")
@@ -581,9 +674,11 @@ async def processar_paj_stream(
     Assume os PDFs já baixados em 'Arquivos SAT'. `prazo_dias` > 0 define prazo de
     conclusão da tramitação (hoje + N dias); 0 = sem prazo. Termina com
     {'done': True, 'resultado': {...}}."""
-    grupo = grupo or GRUPO_PADRAO
+    nao_tramitar = (grupo == NAO_TRAMITAR)
+    if not nao_tramitar:
+        grupo = grupo or GRUPO_PADRAO
     prazo_data = None
-    if prazo_dias and int(prazo_dias) > 0:
+    if prazo_dias and int(prazo_dias) > 0 and not nao_tramitar:
         prazo_data = (date.today() + timedelta(days=int(prazo_dias))).strftime("%d/%m/%Y")
     log: list[dict] = []
 
@@ -595,7 +690,8 @@ async def processar_paj_stream(
 
     num = _norm_to_num(paj_norm)
     prefixo = "[dry-run] " if dry_run else ""
-    yield _ev("novo", f"{prefixo}Processando {num} (grupo destino: {grupo})")
+    destino_txt = "sem tramitação" if nao_tramitar else f"grupo destino: {grupo}"
+    yield _ev("novo", f"{prefixo}Processando {num} ({destino_txt})")
 
     mp = next((m for m in _ler_pajs_manuais() if m.get("paj_norm") == paj_norm), None)
     if not mp or not mp.get("id_processo"):
@@ -608,14 +704,21 @@ async def processar_paj_stream(
     item = {"id": id_proc, "id_tramite": "", "assistido": mp.get("assistido", "")}
     yield passo("Localização do PAJ", True, f"id_processo={id_proc}")
 
-    anexos = listar_arquivos_sat(paj_norm)
+    # anexos = TUDO que estiver ATIVO na tabela: documentos do ASSISTIDO (pasta principal) +
+    # do INSTITUIDOR (subpasta), numa única movimentação.
+    anexos_assist = listar_arquivos_sat(paj_norm)
+    anexos_inst = listar_arquivos_instituidor(paj_norm)
+    anexos = anexos_assist + anexos_inst
     if not anexos:
         d = (f"Nenhum PDF em '{SUBPASTA_SAT}' para {num}. Baixe os documentos do SAT antes "
              f"de processar (pasta: {pasta_arquivos_sat(paj_norm)}).")
         yield passo("Documentos do SAT", False, d)
         yield {"done": True, "resultado": {"ok": False, "status": "falha", "detalhe": d}}
         return
-    yield passo("Documentos do SAT", True, f"{len(anexos)} arquivo(s) para juntar")
+    _det_anexos = f"{len(anexos)} arquivo(s) para juntar"
+    if anexos_inst:
+        _det_anexos += f" ({len(anexos_assist)} do assistido + {len(anexos_inst)} do instituidor)"
+    yield passo("Documentos do SAT", True, _det_anexos)
 
     pajs = [{"id": id_proc, "numero": num}]
     resultado: dict[str, Any] = {"paj": num, "paj_norm": paj_norm, "grupo": grupo}
@@ -628,29 +731,40 @@ async def processar_paj_stream(
     resultado["mov_seq"] = mv.get("mov_seq")
     resultado["mov_detalhe"] = mv.get("detalhe", "")
     if not mv.get("ok"):
-        _gravar_hist(paj_norm, item, anexos, grupo, resultado, "falha", "Falha na movimentação.", log)
+        _gravar_hist(paj_norm, item, anexos, ("" if nao_tramitar else grupo), resultado,
+                     "falha", "Falha na movimentação.", log)
         yield {"done": True, "resultado": {"ok": False, "status": "falha", "detalhe": mv.get("detalhe", "")}}
         return
 
-    # 2) TRAMITAR
-    prazo_txt = f"prazo até {prazo_data}" if prazo_data else "sem prazo"
-    yield _ev("info", f"Tramitando para {grupo} ({prazo_txt})...")
-    tr = await movtram.tramitar_paj(pajs, grupo=grupo, descricao=TRAM_DESCRICAO,
-                                    prazo_data=prazo_data, dry_run=dry_run)
-    yield passo(f"Tramitação para {grupo} ({prazo_txt})", tr.get("ok"), tr.get("detalhe", ""))
-    resultado["tram_status"] = tr.get("status")
-    resultado["tram_caixa"] = grupo
-    resultado["tram_detalhe"] = tr.get("detalhe", "")
+    # 2) TRAMITAR (pulado se o usuário escolheu "Não tramitar")
+    if nao_tramitar:
+        yield passo("Tramitação", None,
+                    "Não realizada — opção \"Não tramitar\" escolhida pelo usuário.")
+        resultado["tram_status"] = "nao_tramitado"
+        resultado["tram_caixa"] = ""
+        resultado["tram_detalhe"] = "Tramitação não realizada — opção \"Não tramitar\" escolhida."
+        tr_ok = True  # a movimentação (anexação) já teve sucesso; não há tramitação a avaliar
+    else:
+        prazo_txt = f"prazo até {prazo_data}" if prazo_data else "sem prazo"
+        yield _ev("info", f"Tramitando para {grupo} ({prazo_txt})...")
+        tr = await movtram.tramitar_paj(pajs, grupo=grupo, descricao=TRAM_DESCRICAO,
+                                        prazo_data=prazo_data, dry_run=dry_run)
+        yield passo(f"Tramitação para {grupo} ({prazo_txt})", tr.get("ok"), tr.get("detalhe", ""))
+        resultado["tram_status"] = tr.get("status")
+        resultado["tram_caixa"] = grupo
+        resultado["tram_detalhe"] = tr.get("detalhe", "")
+        tr_ok = tr.get("ok")
 
     resultado["concluido_status"] = "nao_aplicavel"
     resultado["concluido_detalhe"] = "PAJ manual — sem trâmite na caixa para concluir."
     yield passo("Conclusão", None,
                 "PAJ incluído manualmente: não há trâmite na caixa para concluir — etapa ignorada.")
-    anexacao_ok = tr.get("ok")
-    status = "dry_run" if dry_run else ("concluido" if tr.get("ok") else "parcial")
+    anexacao_ok = tr_ok
+    status = "dry_run" if dry_run else ("concluido" if tr_ok else "parcial")
     detalhe = ("[dry-run] Simulação concluída — nada foi efetivado." if dry_run
-               else ("Movimentado e tramitado (conclusão não se aplica a PAJ manual)."
-                     if tr.get("ok") else "Movimentou, mas falhou a tramitação."))
+               else ("Movimentado (sem tramitação — opção \"Não tramitar\")." if (nao_tramitar and tr_ok)
+                     else ("Movimentado e tramitado (conclusão não se aplica a PAJ manual)."
+                           if tr_ok else "Movimentou, mas falhou a tramitação.")))
 
     # Compilação: apagar os PDFs originais SÓ APÓS a anexação (o compilado já foi anexado na
     # movimentação; os originais ficaram numa subpasta não-anexada até aqui).
@@ -664,112 +778,73 @@ async def processar_paj_stream(
                             f"{n} PDF(s) originais removidos após a anexação do(s) compilado(s).")
             except Exception as e:  # noqa: BLE001
                 yield passo("Limpeza dos originais compilados", None, str(e))
-    _gravar_hist(paj_norm, item, anexos, grupo, resultado, status, detalhe, log)
+    _gravar_hist(paj_norm, item, anexos, ("" if nao_tramitar else grupo), resultado, status, detalhe, log)
     # PAJ processado com sucesso sai da lista de pendências (some do store).
     if status == "concluido" and not dry_run:
         with __import__("contextlib").suppress(Exception):
-            del_paj_manual(paj_norm)
+            del_paj_manual(paj_norm, apagar_arquivos=False, registrar_historico=False)
     yield {"done": True, "resultado": {"ok": bool(dry_run or anexacao_ok), "status": status, "detalhe": detalhe}}
 
 
-async def _mov_extra_stream(
-    paj_norm: str, id_processo: str, assistido: str, anexos: list[dict],
-    descricao: str, escopo: str, titulo: str,
+async def anexar_mais_stream(
+    paj_norm: str, rec_id: str, id_processo: str, assistido: str, nomes: list[str],
 ) -> AsyncIterator[dict]:
-    """Anexa (SÓ movimentação/juntada) um conjunto de documentos ao PAJ, acessando-o pelo
-    id/número (independe da caixa). NÃO tramita nem conclui. Grava registro SEPARADO no
-    histórico com `escopo` (instituidor|complementar). Retorna também 'salvos' no done."""
+    """Anexação COMPLEMENTAR num PAJ já concluído: nova movimentação (SÓ juntada) com os
+    documentos escolhidos — SEM tramitar nem concluir. Complementa o registro `rec_id` do
+    histórico (lista `movs_extra` + `log`) para exibir o badge da nova movimentação na aba
+    'PAJs Trabalhados'."""
     num = _norm_to_num(paj_norm)
-    log: list[dict] = []
+    log_ev: list[dict] = []
 
-    def passo(etapa: str, ok: bool | None, detalhe: str) -> dict:
-        log.append({"ts": datetime.now().isoformat(timespec="seconds"),
-                    "etapa": etapa, "ok": (None if ok is None else bool(ok)),
-                    "detalhe": str(detalhe or "")[:600]})
-        return _passo_ev(etapa, ok, detalhe)
+    def passo(etapa: str, ok, det: str) -> dict:
+        log_ev.append({"ts": datetime.now().isoformat(timespec="seconds"), "etapa": etapa,
+                       "ok": (None if ok is None else bool(ok)), "detalhe": str(det or "")[:600]})
+        return _passo_ev(etapa, ok, det)
 
-    yield _ev("novo", f"{titulo} — {num} (movimentação/juntada)")
+    yield _ev("novo", f"Anexação complementar em {num}…")
+    # resolve os anexos escolhidos — TODOS os documentos baixados são passíveis de nova
+    # anexação (ativos E excluídos da lixeira; assistido + instituidor).
+    disponiveis = {d["nome"]: d for d in listar_todos_arquivos_sat(paj_norm)}
+    anexos = [{"nome": n, "caminho": disponiveis[n]["caminho"], "tipo": "pdf"}
+              for n in (nomes or []) if n in disponiveis]
     if not anexos:
-        d = "Nenhum documento para juntar."
-        yield passo("Documentos", False, d)
-        yield {"done": True, "resultado": {"ok": False, "status": "falha", "detalhe": d}}
+        yield passo("Documentos", False, "Nenhum documento válido selecionado.")
+        yield {"done": True, "resultado": {"ok": False, "detalhe": "Nenhum documento selecionado."}}
         return
+    yield passo("Documentos", True, f"{len(anexos)} documento(s) para anexar")
     if not id_processo:
-        d = "id do PAJ ausente — não foi possível abrir a movimentação."
-        yield passo("Localização do PAJ", False, d)
-        yield {"done": True, "resultado": {"ok": False, "status": "falha", "detalhe": d}}
+        yield passo("Movimentação", False, "Sem id do processo no registro.")
+        yield {"done": True, "resultado": {"ok": False, "detalhe": "Sem id do processo."}}
         return
-    yield passo("Documentos", True, f"{len(anexos)} arquivo(s) para juntar")
-
-    pajs = [{"id": id_processo, "numero": num}]
-    yield _ev("info", "Movimentando (juntada de documento)...")
-    mv = await movtram.movimentar_paj(pajs, descricao, FASE_MOV, anexos, TIPO_ARQUIVO)
-    yield passo("Movimentação (Juntada de documento)", mv.get("ok"), mv.get("detalhe", ""))
-    ok = bool(mv.get("ok"))
-    status = "concluido" if ok else "falha"
-    try:
-        historico_sat.registrar({
-            "paj": num, "paj_norm": paj_norm, "id_processo": id_processo, "id_tramite": "",
-            "assistido": assistido or _ler_metadata(paj_norm).get("assistido_caixa", ""),
-            "cpf": "", "escopo": escopo,
-            "n_arquivos": len(anexos), "arquivos": [a["nome"] for a in anexos],
-            "mov_status": mv.get("status"), "mov_seq": mv.get("mov_seq"),
-            "mov_detalhe": mv.get("detalhe", ""),
-            "tram_status": "ja_foi", "tram_caixa": "", "tram_detalhe": "",
-            "concluido_status": "ja_foi", "concluido_detalhe": "",
-            "status": status,
-            "detalhe": (f"{titulo}: juntada (movimentação) concluída." if ok
-                        else f"{titulo}: falha na movimentação."),
-            "log": log,
-        })
-    except Exception:  # noqa: BLE001
-        pass
-    yield {"done": True, "resultado": {"ok": ok, "status": status,
-           "detalhe": mv.get("detalhe", ""), "escopo": escopo}}
+    yield _ev("info", "Movimentando (anexação complementar)…")
+    mv = await movtram.movimentar_paj([{"id": id_processo, "numero": num}],
+                                      MOV_DESCRICAO_COMPLEMENTAR, FASE_MOV, anexos, TIPO_ARQUIVO, False)
+    yield passo("Movimentação complementar", mv.get("ok"), mv.get("detalhe", ""))
+    if not mv.get("ok"):
+        yield {"done": True, "resultado": {"ok": False, "detalhe": mv.get("detalhe", "")}}
+        return
+    # complementa o registro existente (badge da nova mov + log)
+    extra = {"seq": mv.get("mov_seq"), "ts": datetime.now().isoformat(timespec="seconds"),
+             "n": len(anexos), "arquivos": [a["nome"] for a in anexos]}
+    with __import__("contextlib").suppress(Exception):
+        reg = next((r for r in historico_sat.listar() if r.get("id") == rec_id), None)
+        movs = list((reg or {}).get("movs_extra") or []) + [extra]
+        novo_log = list((reg or {}).get("log") or []) + log_ev
+        historico_sat.atualizar(rec_id, {"movs_extra": movs, "log": novo_log})
+    yield passo("Histórico atualizado", True,
+                f"Mov {mv.get('mov_seq')} registrada como anexação complementar (sem tramitar/concluir)")
+    yield {"done": True, "resultado": {"ok": True, "mov_seq": mv.get("mov_seq"), "n": len(anexos)}}
 
 
-async def processar_instituidor_stream(
-    paj_norm: str, id_processo: str, assistido: str = "",
-) -> AsyncIterator[dict]:
-    """Anexa (movimentação-only) os documentos do INSTITUIDOR (subpasta 'Instituidor')."""
-    async for ev in _mov_extra_stream(
-            paj_norm, id_processo, assistido, listar_arquivos_instituidor(paj_norm),
-            MOV_DESCRICAO_INSTITUIDOR, "instituidor", "Documentos do INSTITUIDOR"):
-        yield ev
-
-
-async def processar_complementar_stream(
-    paj_norm: str, id_processo: str, assistido: str = "",
-) -> AsyncIterator[dict]:
-    """Anexa (movimentação-only) os documentos do DOWNLOAD COMPLEMENTAR (subpasta
-    'Complementar'); ao final, move os PDFs para a pasta principal (preserva o acervo)."""
-    anexos = listar_arquivos_complementar(paj_norm)
-    resultado_ok = False
-    async for ev in _mov_extra_stream(
-            paj_norm, id_processo, assistido, anexos,
-            MOV_DESCRICAO_COMPLEMENTAR, "complementar", "Download complementar"):
-        if ev.get("done"):
-            resultado_ok = bool(ev.get("resultado", {}).get("ok"))
-        yield ev
-    # move os PDFs complementares para a pasta principal (só se a movimentação deu certo)
-    if resultado_ok:
-        destino = pasta_arquivos_sat(paj_norm)
-        for a in anexos:
-            try:
-                shutil.move(a["caminho"], str(destino / Path(a["caminho"]).name))
-            except Exception:  # noqa: BLE001
-                pass
-
-
-def mesclar_complementar_pendente(paj_norm: str) -> dict:
+def mesclar_complementar_pendente(paj_norm: str, escopo: str = "assistido") -> dict:
     """Download complementar em PAJ AINDA NÃO ANEXADO: move os PDFs da subpasta
-    'Complementar' para a pasta principal (juntam-se ao acervo pendente, para entrarem na
-    futura movimentação) e MESCLA o log/inventário no _log_download.json principal —
-    upsert do inventário por (key, sub), salvos/pulados somados e eventos anexados com um
-    marcador (log complementar visível no mesmo visualizador). SEM movimentação. Retorna
-    {ok, movidos, n_arquivos}."""
-    comp = pasta_complementar(paj_norm)
-    principal = pasta_arquivos_sat(paj_norm)
+    'Complementar' para a pasta do escopo (assistido → principal; instituidor → 'Instituidor')
+    e MESCLA o log/inventário no _log_download.json daquela pasta — upsert do inventário por
+    (key, sub), salvos/pulados somados e eventos anexados com um marcador (log complementar
+    visível no mesmo visualizador). SEM movimentação. Retorna {ok, movidos, n_arquivos}."""
+    paths = _escopo_paths(paj_norm, escopo)
+    comp = paths["complementar"]
+    principal = paths["destino"]
     principal.mkdir(parents=True, exist_ok=True)
     movidos: list[str] = []
     if comp.is_dir():
@@ -794,14 +869,21 @@ def mesclar_complementar_pendente(paj_norm: str) -> dict:
             if s not in salvos:
                 salvos.append(s)
         main["salvos"] = salvos
+        # Merge do inventário SEM REBAIXAR: o download complementar marca os tipos NÃO
+        # escolhidos como "nao_selecionado" — isso NÃO pode sobrescrever um "baixado"
+        # anterior (senão os já baixados sumiriam do histórico). Prioridade: baixado > outros
+        # status reais > nao_selecionado; e nunca introduzimos "nao_selecionado" como novidade.
+        _PRIO = {"baixado": 3, "nao_selecionado": 0}
+        _p = lambda st: _PRIO.get(st, 1)  # noqa: E731
         inv = list(main.get("inventario", []) or [])
         idx = {(it.get("key"), it.get("sub")): i for i, it in enumerate(inv)}
         for it in cdata.get("inventario", []) or []:
             chave = (it.get("key"), it.get("sub"))
             if chave in idx:
-                inv[idx[chave]] = it   # comp é mais novo → prevalece
-            else:
-                inv.append(it); idx[chave] = len(inv) - 1
+                if _p(it.get("status")) >= _p(inv[idx[chave]].get("status")):
+                    inv[idx[chave]] = it   # só sobe/empata — nunca rebaixa um "baixado"
+            elif it.get("status") != "nao_selecionado":
+                inv.append(it); idx[chave] = len(inv) - 1  # ignora ruído de "não selecionado"
         main["inventario"] = inv
         main["pulados"] = list(main.get("pulados", []) or []) + list(cdata.get("pulados", []) or [])
         ev = list(main.get("eventos", []) or [])
@@ -817,7 +899,7 @@ def mesclar_complementar_pendente(paj_norm: str) -> dict:
             pass
     with __import__("contextlib").suppress(Exception):
         shutil.rmtree(comp, ignore_errors=True)
-    return {"ok": True, "movidos": movidos, "n_arquivos": len(listar_arquivos_sat(paj_norm))}
+    return {"ok": True, "movidos": movidos, "n_arquivos": len(paths["listar"](paj_norm))}
 
 
 def _gravar_hist(paj_norm, item, anexos, grupo, resultado, status, detalhe, log) -> None:

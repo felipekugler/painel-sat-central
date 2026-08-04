@@ -55,6 +55,8 @@
         <div class="card-body py-3">
             <div class="flex items-center gap-2 flex-wrap">
                 <span class="text-sm font-medium mr-1">Tramitar para:</span>
+                <button class="btn btn-xs" :class="grupoSel===NAO_TRAMITAR ? 'btn-primary' : 'btn-outline'"
+                        @click="grupoSel=NAO_TRAMITAR" title="Só movimenta/anexa os documentos ao PAJ — sem tramitar para nenhuma caixa">Não tramitar</button>
                 <button class="btn btn-xs" :class="grupoSel===padrao ? 'btn-primary' : 'btn-outline'"
                         @click="grupoSel=padrao" x-text="padrao"></button>
                 <button class="btn btn-xs btn-ghost" @click="carregarGrupos()" :disabled="carregandoGrupos">
@@ -64,20 +66,27 @@
                 <select x-show="grupos.length" class="select select-bordered select-xs" x-model="grupoSel">
                     <template x-for="g in grupos" :key="g"><option :value="g" x-text="g"></option></template>
                 </select>
-                <span class="mx-2 text-base-content/30">|</span>
-                <span class="text-sm font-medium mr-1">Prazo:</span>
-                <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-                    <input type="radio" class="sat-radio" :checked="!comPrazo" @change="comPrazo=false">
-                    sem prazo
-                </label>
-                <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-                    <input type="radio" class="sat-radio" :checked="comPrazo" @change="comPrazo=true">
-                    em
-                    <input type="number" min="1" max="365" class="input input-bordered input-xs w-16"
-                           x-model.number="prazoDias" @focus="comPrazo=true">
-                    dias
-                </label>
-                <span class="text-xs text-base-content/50" x-show="comPrazo" x-text="'(conclui até ' + dataPrazo() + ')'"></span>
+                <template x-if="grupoSel!==NAO_TRAMITAR">
+                    <span class="flex items-center gap-2 flex-wrap">
+                        <span class="mx-2 text-base-content/30">|</span>
+                        <span class="text-sm font-medium mr-1">Prazo:</span>
+                        <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                            <input type="radio" class="sat-radio" :checked="!comPrazo" @change="comPrazo=false">
+                            sem prazo
+                        </label>
+                        <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                            <input type="radio" class="sat-radio" :checked="comPrazo" @change="comPrazo=true">
+                            em
+                            <input type="number" min="1" max="365" class="input input-bordered input-xs w-16"
+                                   x-model.number="prazoDias" @focus="comPrazo=true">
+                            dias
+                        </label>
+                        <span class="text-xs text-base-content/50" x-show="comPrazo" x-text="'(conclui até ' + dataPrazo() + ')'"></span>
+                    </span>
+                </template>
+                <span class="text-xs text-base-content/50" x-show="grupoSel===NAO_TRAMITAR">
+                    Só os documentos serão anexados ao PAJ — sem tramitação.
+                </span>
             </div>
         </div>
     </div>
@@ -137,14 +146,14 @@
                                 </td>
                                 <td>
                                     <div class="inline-flex items-center gap-1.5">
-                                        <span x-show="p.n_arquivos > 0"
+                                        <span x-show="((p.n_arquivos||0)+(p.n_instituidor||0)) > 0"
                                               class="badge badge-success badge-sm gap-1 whitespace-nowrap cursor-pointer"
                                               @click="toggleDocs(p)"
-                                              :title="docsAbertos[p.paj_norm] ? 'Ocultar documentos' : 'Ver documentos baixados'">
-                                            <span x-text="p.n_arquivos + ' arquivo(s)'"></span>
+                                              :title="docsAbertos[p.paj_norm] ? 'Ocultar documentos' : 'Ver documentos baixados (assistido + instituidor)'">
+                                            <span x-text="((p.n_arquivos||0)+(p.n_instituidor||0)) + ' arquivo(s)'"></span>
                                             <span class="text-[10px]" x-text="docsAbertos[p.paj_norm] ? '▲' : '▼'"></span>
                                         </span>
-                                        <span x-show="p.n_arquivos === 0" class="badge badge-ghost badge-sm whitespace-nowrap">Aguardando download</span>
+                                        <span x-show="((p.n_arquivos||0)+(p.n_instituidor||0)) === 0" class="badge badge-ghost badge-sm whitespace-nowrap">Aguardando download</span>
                                         <!-- ponto vermelho: houve falha no download (clique abre o log) -->
                                         <span x-show="p.tem_falha" class="sat-falha-dot" @click.stop="verLogDownload(p)"
                                               title="Houve falha no último download — clique para ver o log"></span>
@@ -166,14 +175,9 @@
                                             title="Pensão por morte / auxílio-reclusão: baixar documentos do instituidor (2ª consulta, CPF do instituidor)">
                                         Docs do instituidor
                                     </button>
-                                    <button x-show="p.n_instituidor > 0" class="btn btn-sm btn-outline ml-1" :disabled="rodando"
-                                            @click="anexarInstituidor(p)"
-                                            title="Anexar (só movimentação) os documentos do instituidor ao PAJ — registro separado">
-                                        Anexar instituidor (<span x-text="p.n_instituidor"></span>)
-                                    </button>
-                                    <button x-show="p.n_arquivos > 0" class="btn btn-sm btn-outline ml-1" :disabled="rodando"
+                                    <button x-show="((p.n_arquivos||0)+(p.n_instituidor||0)) > 0" class="btn btn-sm btn-outline ml-1" :disabled="rodando"
                                             @click="processar(p)"
-                                            title="Movimentar → tramitar no SISDPU (sem conclusão — PAJ manual)">Anexar ao PAJ</button>
+                                            :title="'Anexa ao PAJ TODOS os documentos ativos na tabela (assistido + instituidor). ' + (grupoSel===NAO_TRAMITAR ? 'Só movimenta (sem tramitar).' : ('Movimenta → tramita para ' + grupoSel + ' (sem concluir — não há trâmite na caixa).'))">Anexar ao PAJ</button>
                                 </td>
                             </tr>
                             <tr x-show="narrativaAberta[p.paj_norm]">
@@ -197,10 +201,10 @@
                                 <td colspan="6" class="bg-base-100">
                                     <table class="table table-xs w-full sat-docs">
                                         <thead><tr class="text-[11px] text-base-content/50">
-                                            <th>Documento</th><th class="w-20">Tamanho</th>
+                                            <th>Documento</th><th class="w-52">Referência</th><th class="w-20">Tamanho</th>
                                             <th class="w-16 text-center">Excluir</th><th class="w-20 text-center">Recuperar</th></tr></thead>
                                         <tbody>
-                                            <template x-for="a in (docsArquivos[p.paj_norm] || [])" :key="a.nome">
+                                            <template x-for="a in (docsArquivos[p.paj_norm] || [])" :key="a.escopo + '#' + a.nome">
                                                 <tr class="hover" :class="a.excluido ? 'opacity-40' : ''">
                                                     <td :class="a.excluido ? 'line-through' : ''">
                                                         <a :href="`/api/sat/${encodeURIComponent(p.paj_norm)}/arquivo?nome=${encodeURIComponent(a.nome)}`"
@@ -208,15 +212,20 @@
                                                            style="color:var(--accent)" title="Abrir o PDF em nova aba"
                                                            x-text="a.nome"></a>
                                                     </td>
+                                                    <td class="whitespace-nowrap">
+                                                        <span class="badge badge-sm"
+                                                              :class="a.escopo==='instituidor' ? 'badge-info' : 'badge-ghost'"
+                                                              x-text="a.referencia"></span>
+                                                    </td>
                                                     <td class="whitespace-nowrap tabular-nums" :class="a.excluido ? 'line-through' : ''" x-text="fmtTam(a.tamanho)"></td>
                                                     <td class="text-center"><button x-show="!a.excluido" class="btn btn-ghost btn-xs text-error px-1"
-                                                                @click="excluir(p, a.nome)" title="Remover da lista (não será anexado ao PAJ; pode recuperar)">✕</button></td>
+                                                                @click="excluir(p, a.nome, a.escopo)" title="Remover da lista (não será anexado ao PAJ; pode recuperar)">✕</button></td>
                                                     <td class="text-center"><button x-show="a.excluido" class="btn btn-ghost btn-xs px-1" style="color:var(--accent)"
-                                                                @click="recuperar(p, a.nome)" title="Recuperar (voltará a ser anexado)">↶</button></td>
+                                                                @click="recuperar(p, a.nome, a.escopo)" title="Recuperar (voltará a ser anexado)">↶</button></td>
                                                 </tr>
                                             </template>
                                             <tr x-show="(docsArquivos[p.paj_norm] || []).length === 0">
-                                                <td colspan="4" class="text-base-content/40">Nenhum documento na pasta.</td>
+                                                <td colspan="5" class="text-base-content/40">Nenhum documento na pasta.</td>
                                             </tr>
                                         </tbody>
                                     </table>
@@ -249,7 +258,7 @@
                         <tr>
                             <th>Data</th><th>PAJ</th><th>Assistido</th><th>Movimentado</th>
                             <th>Tramitado</th><th>Concluído</th><th class="text-center">Log</th>
-                            <th class="text-center">Baixar Mais</th>
+                            <th class="text-center">Baixar Mais</th><th class="text-center">Anexar Mais</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -268,11 +277,19 @@
                                     <span x-show="r.escopo==='complementar'" class="badge badge-info badge-sm ml-1">Download complementar</span>
                                     <span x-show="r.escopo==='exclusao_manual'" class="badge badge-error badge-sm ml-1">Exclusão manual</span>
                                 </td>
-                                <td><span class="badge badge-sm" :class="r.mov_status==='movimentado'?'badge-ocre':(r.mov_status==='nao_aplicavel'?'badge-ghost':'badge-error')"
-                                          x-text="r.mov_seq ? ('Mov ' + r.mov_seq) : (r.mov_status==='nao_aplicavel' ? 'N/A' : (r.mov_status||'—'))"></span></td>
+                                <td class="whitespace-nowrap">
+                                    <span class="badge badge-sm" :class="r.mov_status==='movimentado'?'badge-ocre':(r.mov_status==='nao_aplicavel'?'badge-ghost':'badge-error')"
+                                          x-text="r.mov_seq ? ('Mov ' + r.mov_seq) : (r.mov_status==='nao_aplicavel' ? 'N/A' : (r.mov_status||'—'))"></span>
+                                    <template x-for="m in (r.movs_extra||[])" :key="m.seq">
+                                        <span class="badge badge-info badge-sm ml-1"
+                                              :title="(m.n||0)+' documento(s) — anexação complementar em '+fmtDataHora(m.ts)"
+                                              x-text="'Mov ' + m.seq"></span>
+                                    </template>
+                                </td>
                                 <td><span class="badge badge-sm"
-                                          :class="r.tram_status==='tramitado'?'badge-ocre':((r.tram_status==='ja_foi'||r.tram_status==='nao_aplicavel')?'badge-ghost':'badge-error')"
-                                          x-text="r.tram_status==='tramitado' ? r.tram_caixa : (r.tram_status==='ja_foi' ? 'já foi' : (r.tram_status==='nao_aplicavel' ? 'N/A' : (r.tram_status||'—')))"></span></td>
+                                          :class="r.tram_status==='tramitado'?'badge-ocre':((r.tram_status==='ja_foi'||r.tram_status==='nao_aplicavel'||r.tram_status==='nao_tramitado')?'badge-ghost':'badge-error')"
+                                          :title="r.tram_status==='nao_tramitado' ? 'Só os documentos foram anexados — o usuário escolheu não tramitar' : ''"
+                                          x-text="r.tram_status==='tramitado' ? r.tram_caixa : (r.tram_status==='ja_foi' ? 'já foi' : (r.tram_status==='nao_aplicavel' ? 'N/A' : (r.tram_status==='nao_tramitado' ? 'Não tramitado' : (r.tram_status||'—'))))"></span></td>
                                 <td><span class="badge badge-sm"
                                           :class="r.concluido_status==='concluido'?'badge-ocre':((r.concluido_status==='ja_foi'||r.concluido_status==='nao_aplicavel')?'badge-ghost':'badge-error')"
                                           :title="(r.concluido_status==='nao_aplicavel' && r.escopo!=='exclusao_manual') ? 'PAJ manual — sem trâmite na caixa para concluir' : ''"
@@ -300,10 +317,19 @@
                                     </button>
                                     <span x-show="r.escopo==='exclusao_manual'" class="text-base-content/30">—</span>
                                 </td>
+                                <td class="text-center">
+                                    <button x-show="r.escopo!=='exclusao_manual'" class="btn btn-ghost btn-xs" :disabled="rodando" @click="abrirAnexarMais(r)"
+                                            title="Anexar mais documentos ao PAJ numa nova movimentação (sem tramitar/concluir)">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                                        </svg>
+                                    </button>
+                                    <span x-show="r.escopo==='exclusao_manual'" class="text-base-content/30">—</span>
+                                </td>
                             </tr>
                         </template>
                         <tr x-show="historico.length === 0">
-                            <td colspan="8" class="text-center text-base-content/40 py-6">Nenhum PAJ trabalhado ainda.</td>
+                            <td colspan="9" class="text-center text-base-content/40 py-6">Nenhum PAJ trabalhado ainda.</td>
                         </tr>
                     </tbody>
                 </table>
@@ -385,13 +411,14 @@
         <div class="modal-box max-w-[50vw]">
             <h3 class="font-bold text-lg mb-1">Baixar mais documentos — <span class="font-mono" x-text="bmAlvo && bmAlvo.paj"></span></h3>
             <p class="text-sm text-base-content/70 mb-3" x-show="bmModo === 'concluido'">
-                Nova consulta ao SAT para <strong x-text="bmAlvo && bmAlvo.assistido"></strong>. Os selecionados
-                serão baixados e anexados por uma <strong>nova movimentação</strong> (sem tramitar) —
-                registrado como "download complementar". Você resolve o CAPTCHA na janela.
+                Nova consulta ao SAT para <strong x-text="bmAlvo && bmAlvo.assistido"></strong>. Os documentos
+                selecionados serão baixados e poderão ser anexados no botão <strong>"Anexar Mais"</strong>.
+                Você precisará resolver o CAPTCHA na janela do SAT.
             </p>
             <p class="text-sm text-base-content/70 mb-3" x-show="bmModo === 'pendente'">
-                Nova consulta ao SAT para <strong x-text="bmAlvo && bmAlvo.assistido"></strong>.
-                Selecione o que deseja baixar de forma complementar.
+                Nova consulta ao SAT para <strong x-text="bmAlvo && bmAlvo.assistido"></strong>. Os documentos
+                selecionados serão baixados e poderão ser anexados no botão <strong>"Anexar ao PAJ"</strong>.
+                Você precisará resolver o CAPTCHA na janela do SAT.
             </p>
             <div class="alert alert-warning py-2 text-xs mb-3" x-show="bmSemInventario">
                 <span>
@@ -401,8 +428,6 @@
                 </span>
             </div>
             <div class="flex items-center gap-2 mb-2 flex-wrap">
-                <span class="text-sm font-medium">CPF:</span>
-                <input type="text" class="input input-bordered input-sm w-40" x-model="bmCpf" placeholder="000.000.000-00">
                 <span class="text-xs text-base-content/50 ml-auto" x-text="bmSel.length + ' selecionado(s)'"></span>
             </div>
             <div class="max-h-[340px] overflow-y-auto space-y-3 pr-1">
@@ -412,30 +437,84 @@
                 <div x-show="!bmCarregando && bmLista.length===0" class="text-sm text-base-content/50 py-4">
                     Nada a listar para este PAJ.
                 </div>
-                <template x-for="cl in bmLista" :key="cl.grupo">
+                <template x-for="sec in bmLista" :key="sec.escopo">
                     <div>
-                        <div class="text-xs font-semibold text-base-content/60 mb-1" x-text="cl.grupo"></div>
-                        <template x-for="(row, ri) in cl.rows" :key="cl.grupo + '#' + ri + '#' + row.alvo">
-                            <label class="flex items-center gap-2 text-sm py-0.5"
-                                   :class="row.ja_baixado ? 'opacity-60' : 'cursor-pointer'">
-                                <input type="checkbox" class="checkbox checkbox-sm" :value="row.alvo"
-                                       x-model="bmSel" :disabled="row.ja_baixado">
-                                <span x-text="row.label"></span>
-                                <span x-show="bmStatusTxt(row)" class="text-[11px]"
-                                      :class="row.ja_baixado ? 'text-success' : 'text-warning'"
-                                      x-text="'(' + bmStatusTxt(row) + ')'"></span>
+                        <div class="flex items-center gap-2 border-b border-base-300 pb-1 mb-1 sticky top-0 bg-base-100 z-10">
+                            <span class="badge badge-sm"
+                                  :class="sec.escopo==='instituidor' ? 'badge-info' : 'badge-ghost'"
+                                  x-text="sec.titulo"></span>
+                            <span class="text-xs text-base-content/50">CPF:</span>
+                            <input type="text" class="input input-bordered input-xs w-36"
+                                   x-model="bmCpfPorEscopo[sec.escopo]" placeholder="000.000.000-00">
+                        </div>
+                        <template x-for="cl in sec.grupos" :key="sec.escopo + '#' + cl.grupo">
+                            <div class="mb-1">
+                                <div class="text-xs font-semibold text-base-content/60 mb-0.5 pl-1" x-text="cl.grupo"></div>
+                                <template x-for="(row, ri) in cl.rows" :key="sec.escopo + '#' + cl.grupo + '#' + ri + '#' + row.alvo">
+                                    <label class="flex items-center gap-2 text-sm py-0.5 pl-1"
+                                           :class="row.ja_baixado ? 'opacity-60' : 'cursor-pointer'">
+                                        <input type="checkbox" class="checkbox checkbox-sm" :value="sec.escopo + '::' + row.alvo"
+                                               x-model="bmSel" :disabled="row.ja_baixado">
+                                        <span x-text="row.label"></span>
+                                        <span x-show="bmStatusTxt(row)" class="text-[11px]"
+                                              :class="row.ja_baixado ? 'text-success' : 'text-warning'"
+                                              x-text="'(' + bmStatusTxt(row) + ')'"></span>
+                                    </label>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+            <div class="modal-action">
+                <button class="btn btn-primary btn-sm" :disabled="bmSel.length===0" @click="baixarMais()">Baixar documentos</button>
+                <button class="btn btn-sm" @click="baixarMaisModal=false">Cancelar</button>
+            </div>
+        </div>
+        <div class="modal-backdrop" @click="baixarMaisModal=false"></div>
+    </div>
+
+    <!-- Modal: Anexar Mais (anexação complementar num PAJ já processado) -->
+    <div class="modal" :class="{'modal-open': amModal}">
+        <div class="modal-box max-w-[50vw]">
+            <h3 class="font-bold text-lg mb-1">Anexar mais documentos — <span class="font-mono" x-text="amAlvo && amAlvo.paj"></span></h3>
+            <p class="text-sm text-base-content/70 mb-3">
+                Selecione os documentos para anexar ao PAJ numa nova movimentação complementar. Não haverá
+                nova tramitação. O log de movimentações é complementado e a coluna
+                "Movimentado" ganha o selo da nova movimentação.
+            </p>
+            <div class="flex items-center gap-2 mb-2 flex-wrap">
+                <button class="btn btn-xs btn-ghost" @click="amMarcarTodos(true)">Marcar todos</button>
+                <button class="btn btn-xs btn-ghost" @click="amMarcarTodos(false)">Limpar</button>
+                <span class="text-xs text-base-content/50 ml-auto" x-text="amSel.length + ' selecionado(s)'"></span>
+            </div>
+            <div class="max-h-[340px] overflow-y-auto space-y-1 pr-1">
+                <div x-show="amCarregando" class="text-sm text-base-content/50 py-4">
+                    <span class="loading loading-spinner loading-xs"></span> Lendo os documentos baixados…
+                </div>
+                <div x-show="!amCarregando && amLista.length===0" class="text-sm text-base-content/50 py-4">
+                    Nenhum documento baixado para este PAJ.
+                </div>
+                <template x-for="cl in amLista" :key="cl.referencia">
+                    <div>
+                        <div class="text-xs font-semibold text-base-content/60 mb-1" x-text="cl.referencia"></div>
+                        <template x-for="(row, ri) in cl.rows" :key="cl.referencia + '#' + ri + '#' + row.nome">
+                            <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+                                <input type="checkbox" class="checkbox checkbox-sm" :value="row.nome" x-model="amSel">
+                                <span x-text="row.nome"></span>
+                                <span x-show="row.ja_anexado" class="text-[11px] text-success"
+                                      x-text="'(Já anexado ao PAJ' + (row.movs && row.movs.length ? ' - mov ' + row.movs.join(', ') : '') + ')'"></span>
                             </label>
                         </template>
                     </div>
                 </template>
             </div>
             <div class="modal-action">
-                <button class="btn btn-primary btn-sm" :disabled="!bmCpf || bmSel.length===0" @click="baixarMais()"
-                        x-text="bmModo === 'pendente' ? 'Baixar e juntar ao acervo' : 'Baixar e anexar'"></button>
-                <button class="btn btn-sm" @click="baixarMaisModal=false">Cancelar</button>
+                <button class="btn btn-primary btn-sm" :disabled="amSel.length===0" @click="confirmarAnexarMais()">Anexar selecionados</button>
+                <button class="btn btn-sm" @click="amModal=false">Cancelar</button>
             </div>
         </div>
-        <div class="modal-backdrop" @click="baixarMaisModal=false"></div>
+        <div class="modal-backdrop" @click="amModal=false"></div>
     </div>
 
     <!-- Modal: escolher tipos de documentos por pretensão -->
@@ -598,7 +677,8 @@
 function satPage() {
     return {
         pendentes: [], historico: [], grupos: [],
-        padrao: '01 - PREV_DIVPREV', grupoSel: '01 - PREV_DIVPREV',
+        NAO_TRAMITAR: '__nao_tramitar__',
+        padrao: '01 - PREV_DIVPREV', grupoSel: '__nao_tramitar__',
         comPrazo: false, prazoDias: 15,
         manualPaj: '', addingManual: false, manualMsg: '', manualMsgErro: false,
         carregando: false, carregandoGrupos: false, rodando: false,
@@ -614,7 +694,8 @@ function satPage() {
         tiposInstituidor: null, tiposInstituidorDefault: [],
         patIgnorarModal: false, patIgnorar: [], patIgnorarNovo: '', patIgnorarMsg: '',
         instModal: false, instCpf: '', instNome: '', instAlvo: null,
-        baixarMaisModal: false, bmAlvo: null, bmCpf: '', bmSel: [], bmLista: [], bmCarregando: false, bmModo: 'concluido', bmSemInventario: false,
+        baixarMaisModal: false, bmAlvo: null, bmCpfPorEscopo: { assistido: '', instituidor: '' }, bmSel: [], bmLista: [], bmCarregando: false, bmModo: 'concluido', bmSemInventario: false,
+        amModal: false, amAlvo: null, amLista: [], amSel: [], amCarregando: false,
 
         async init() {
             // NÃO abrir o navegador ao carregar a aba: checagem LEVE (peek) só LÊ o estado
@@ -688,26 +769,95 @@ function satPage() {
             };
         },
         async abrirBaixarMais(r, modo = 'concluido') {
-            // modo 'concluido' = PAJ já anexado (histórico) → baixa+anexa (movimentação).
-            // modo 'pendente'  = PAJ ainda não anexado → baixa e junta ao acervo pendente.
+            // modo 'concluido' = PAJ já processado (histórico) → baixa; anexação depois via
+            // "Anexar Mais". modo 'pendente' = PAJ ainda não anexado → baixa e junta ao acervo.
             this.bmModo = modo;
-            this.bmAlvo = r; this.bmCpf = r.cpf || ''; this.bmSel = []; this.bmLista = [];
+            this.bmAlvo = r; this.bmSel = []; this.bmLista = [];
+            this.bmCpfPorEscopo = { assistido: r.cpf || '', instituidor: '' };
             this.bmSemInventario = false;
             this.baixarMaisModal = true; this.bmCarregando = true;
             try {
                 const j = await (await fetch(`/api/sat/${encodeURIComponent(r.paj_norm)}/inventario`)).json();
-                if (j.cpf) this.bmCpf = j.cpf;   // CPF vem do log de download
+                if (j.cpf) this.bmCpfPorEscopo.assistido = j.cpf;   // CPF vem do log de download
+                const tipos = j.tipos || [];
+                const secoes = [];
                 const itens = j.itens || [];
                 if (itens.length) {
-                    this.bmLista = this._montarBmLista(itens, j.tipos || []);
+                    secoes.push({ escopo: 'assistido', titulo: 'Assistido', grupos: this._montarBmLista(itens, tipos) });
                 } else {
                     // Sem inventário (1º download interrompido/sem log): oferece o CATÁLOGO
                     // de tipos para selecionar o que baixar (todos os subitens de cada tipo).
                     this.bmSemInventario = true;
-                    this.bmLista = this._montarBmListaCatalogo(j.tipos || []);
+                    secoes.push({ escopo: 'assistido', titulo: 'Assistido', grupos: this._montarBmListaCatalogo(tipos) });
                 }
+                // havendo instituidor com inventário, adiciona a seção dele (CPF próprio).
+                if (j.instituidor && (j.instituidor.itens || []).length) {
+                    this.bmCpfPorEscopo.instituidor = j.instituidor.cpf || '';
+                    secoes.push({ escopo: 'instituidor', titulo: 'Instituidor', grupos: this._montarBmLista(j.instituidor.itens, tipos) });
+                }
+                this.bmLista = secoes;
             } catch (e) { this.bmLista = []; }
             finally { this.bmCarregando = false; }
+        },
+        async abrirAnexarMais(r) {
+            // lista TODOS os documentos baixados (assistido + instituidor); todos são
+            // passíveis de nova anexação. AGRUPA por referência (assistido primeiro) e
+            // marca os já anexados anteriormente. Estilo do "Baixar mais".
+            this.amAlvo = r; this.amSel = []; this.amLista = [];
+            this.amModal = true; this.amCarregando = true;
+            // mapa nome -> movs em que já foi anexado, fazendo MERGE de todas as anexações
+            // (movimentação principal + cada "anexar mais" registrado em movs_extra).
+            const anexMap = {};
+            const addMov = (arqs, seq) => (arqs || []).forEach(n => {
+                (anexMap[n] || (anexMap[n] = new Set())).add(seq);
+            });
+            addMov(r.arquivos, r.mov_seq);
+            (r.movs_extra || []).forEach(m => addMov(m.arquivos, m.seq));
+            try {
+                const j = await (await fetch(`/api/sat/${encodeURIComponent(r.paj_norm)}/arquivos`)).json();
+                const ordem = { assistido: 0, instituidor: 1 };
+                const grupos = {};
+                const vistos = new Set();  // dedup: o mesmo nome pode estar em principal E em Excluídos
+                (j.arquivos || []).forEach(a => {
+                    const chave = a.escopo + '#' + a.nome;
+                    if (vistos.has(chave)) return;  // ativo vem antes do excluído → mantém o ativo
+                    vistos.add(chave);
+                    const g = grupos[a.referencia] || (grupos[a.referencia] =
+                        { referencia: a.referencia, escopo: a.escopo, rows: [] });
+                    const movs = anexMap[a.nome]
+                        ? [...anexMap[a.nome]].filter(s => s != null).sort((x, y) => x - y) : [];
+                    g.rows.push({ nome: a.nome, ja_anexado: movs.length > 0, movs });
+                });
+                this.amLista = Object.values(grupos)
+                    .sort((x, y) => (ordem[x.escopo] ?? 9) - (ordem[y.escopo] ?? 9));
+            } catch (e) { this.amLista = []; }
+            finally { this.amCarregando = false; }
+        },
+        amMarcarTodos(marcar) {
+            this.amSel = marcar ? this.amLista.flatMap(g => g.rows.map(row => row.nome)) : [];
+        },
+        confirmarAnexarMais() {
+            const r = this.amAlvo;
+            if (!r || this.amSel.length === 0) return;
+            this.amModal = false;
+            this.rodando = true; this.sseTipo = 'processar';
+            this.sseLog = []; this.sseStatus = '— anexando (complementar)'; this.sseFechavel = false; this.sseAberto = true;
+            const nomes = this.amSel.join('|');
+            const url = `/api/sat/${encodeURIComponent(r.paj_norm)}/anexar-mais`
+                + `?rec=${encodeURIComponent(r.id || '')}&id=${encodeURIComponent(r.id_processo || '')}`
+                + `&assistido=${encodeURIComponent(r.assistido || '')}&nomes=${encodeURIComponent(nomes)}`;
+            const es = new EventSource(url); this._es = es;
+            es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
+            es.addEventListener('done', (ev) => {
+                let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
+                this.sseStatus = res.ok ? '— concluído ✓' : '— com aviso';
+                this.sseFechavel = true; this.rodando = false; es.close(); this._es = null;
+                this.carregarHistorico();
+            });
+            es.onerror = () => {
+                this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
+                es.close(); this._es = null;
+            };
         },
         _montarBmListaCatalogo(tipos) {
             const grupos = []; tipos.forEach(t => { if (!grupos.includes(t.grupo)) grupos.push(t.grupo); });
@@ -742,6 +892,7 @@ function satPage() {
                             alvo: it.key + '|' + (it.sub || ''),
                             label: label,
                             status: it.status, ja_baixado: it.ja_baixado, ja_anexado: it.ja_anexado,
+                            anexado_movs: it.anexado_movs || [],
                         });
                     });
                 });
@@ -752,7 +903,8 @@ function satPage() {
         bmStatusTxt(row) {
             const m = [];
             if (row.ja_baixado) m.push('Já baixado');
-            if (row.ja_anexado) m.push('Já anexado ao PAJ');
+            if (row.ja_anexado) m.push('Já anexado ao PAJ' +
+                (row.anexado_movs && row.anexado_movs.length ? ' - mov ' + row.anexado_movs.join(', ') : ''));
             if (!row.ja_baixado) {
                 if (row.status === 'nao_selecionado') m.push('não baixado (desativado p/ a pretensão)');
                 else if (row.status === 'nao_relacionado') m.push('não relacionado à pretensão');
@@ -767,91 +919,81 @@ function satPage() {
             }
             return m.join(' · ');
         },
-        baixarMais() {
+        async baixarMais() {
             const r = this.bmAlvo;
-            if (!r || !this.bmCpf || this.bmSel.length === 0) return;
+            if (!r || this.bmSel.length === 0) return;
+            // separa a seleção por escopo — o valor do checkbox é "escopo::key|sub".
+            const porEscopo = { assistido: [], instituidor: [] };
+            this.bmSel.forEach(v => {
+                const i = v.indexOf('::'); const sc = v.slice(0, i), alvo = v.slice(i + 2);
+                (porEscopo[sc] || porEscopo.assistido).push(alvo);
+            });
+            const temA = porEscopo.assistido.length, temI = porEscopo.instituidor.length;
+            if (!temA && !temI) return;
+            const cpfA = (this.bmCpfPorEscopo.assistido || '').trim();
+            const cpfI = (this.bmCpfPorEscopo.instituidor || '').trim();
+            if (temA && !cpfA) { alert('Informe o CPF do assistido.'); return; }
+            if (temI && !cpfI) { alert('Informe o CPF do instituidor.'); return; }
             if (!this.sessaoOk) { this.baixarMaisModal = false; this.naoLogadoModal = true; return; }
             this.baixarMaisModal = false;
-            const cpf = this.bmCpf, alvos = this.bmSel.join(',');
-            const delay = Math.max(0, Number(this.tempoEntre) || 0);
-            const bloqueio = Math.max(0, Number(this.esperaBloqueio) || 0);
             this.rodando = true; this.sseTipo = 'download';
             this.sseLog = []; this.sseStatus = '— baixando (complementar)'; this.sseFechavel = false; this.sseAberto = true;
-            const url = `/api/sat/${encodeURIComponent(r.paj_norm)}/baixar-complementar`
-                + `?cpf=${encodeURIComponent(cpf)}&nome=${encodeURIComponent(r.assistido || '')}`
-                + `&delay=${delay}&bloqueio=${bloqueio}&alvos=${encodeURIComponent(alvos)}`;
-            const es = new EventSource(url); this._es = es;
-            es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
-            es.addEventListener('done', (ev) => {
-                let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
-                es.close(); this._es = null;
-                const baixou = res && Array.isArray(res.salvos) && res.salvos.length;
-                if (!baixou) {
+            const ondeAnexar = this.bmModo === 'pendente' ? 'Anexar ao PAJ' : 'Anexar Mais';
+            let algo = false;
+            try {
+                // downloads em SEQUÊNCIA (cada escopo é uma consulta ao SAT com CPF próprio e
+                // pode exigir CAPTCHA na janela): assistido primeiro, depois instituidor.
+                if (temA) algo = await this._baixarComplEscopo(r, 'assistido', cpfA, porEscopo.assistido) || algo;
+                if (temI) algo = await this._baixarComplEscopo(r, 'instituidor', cpfI, porEscopo.instituidor) || algo;
+                if (algo) {
+                    this.sseLog.push({ level: 'ok', msg: `✓ Documentos adicionados ao acervo. Anexe-os pelo botão "${ondeAnexar}".` });
+                    this.sseStatus = '— concluído ✓';
+                } else {
                     this.sseStatus = '— nada baixado (sem novos documentos)';
-                    this.sseFechavel = true; this.rodando = false;
-                    if (this.bmModo === 'pendente') this.carregarPendentes();
-                    return;
                 }
-                if (this.bmModo === 'pendente') {
-                    // PAJ ainda NÃO anexado: junta os PDFs ao acervo pendente (SEM movimentação).
-                    this.sseTipo = 'processar';
-                    this.sseStatus = '— juntando ao acervo do PAJ';
-                    this.sseLog.push({ level: 'novo', msg: 'Juntando os documentos complementares ao acervo pendente (sem anexação)…' });
-                    fetch(`/api/sat/${encodeURIComponent(r.paj_norm)}/mesclar-complementar`, { method: 'POST' })
-                        .then(x => x.json()).then(j => {
-                            this.sseLog.push({ level: 'ok', msg: `✓ ${(j.movidos || []).length} documento(s) juntado(s) ao acervo. Total agora: ${j.n_arquivos}.` });
-                            this.sseStatus = '— concluído ✓';
-                            this.sseFechavel = true; this.rodando = false;
-                            this.carregarPendentes();
-                        }).catch(() => {
-                            this.sseLog.push({ level: 'erro', msg: 'Falha ao juntar os documentos ao acervo.' });
-                            this.sseStatus = '— com aviso'; this.sseFechavel = true; this.rodando = false;
-                        });
-                    return;
-                }
-                // modo 'concluido': encadeia a anexação (movimentação) do complementar
-                this.sseTipo = 'processar';  // não é mais download (esconde "Cancelar")
-                this.sseStatus = '— anexando (complementar)';
-                this.sseLog.push({ level: 'novo', msg: 'Anexando os documentos complementares (movimentação)…' });
-                const url2 = `/api/sat/${encodeURIComponent(r.paj_norm)}/anexar-complementar`
-                    + `?id=${encodeURIComponent(r.id_processo || '')}&assistido=${encodeURIComponent(r.assistido || '')}`;
-                const es2 = new EventSource(url2); this._es = es2;
-                es2.addEventListener('log', (e2) => { try { this.sseLog.push(JSON.parse(e2.data)); } catch (e) {} });
-                es2.addEventListener('done', (e2) => {
-                    let r2 = {}; try { r2 = JSON.parse(e2.data); } catch (e) {}
-                    this.sseStatus = r2.ok ? '— concluído ✓' : '— com aviso';
-                    this.sseFechavel = true; this.rodando = false; es2.close(); this._es = null;
-                    this.carregarHistorico();
-                });
-                es2.onerror = () => {
-                    this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
-                    es2.close(); this._es = null;
-                };
-            });
-            es.onerror = () => {
-                this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
-                es.close(); this._es = null;
-            };
+            } catch (e) {
+                this.sseLog.push({ level: 'erro', msg: String(e && e.message || e) });
+                this.sseStatus = '— erro de conexão';
+            } finally {
+                this.sseFechavel = true; this.rodando = false;
+                if (this.bmModo === 'pendente') this.carregarPendentes(); else this.carregarHistorico();
+            }
         },
-        anexarInstituidor(p) {
-            if (this.rodando) return;
-            this.rodando = true; this.sseTipo = 'processar';
-            this.sseLog = []; this.sseStatus = '— anexando docs do instituidor';
-            this.sseFechavel = false; this.sseAberto = true;
-            const url = `/api/sat/${encodeURIComponent(p.paj_norm)}/anexar-instituidor`
-                + `?id=${encodeURIComponent(p.id_processo || '')}&assistido=${encodeURIComponent(p.assistido || '')}`;
-            const es = new EventSource(url); this._es = es;
-            es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
-            es.addEventListener('done', (ev) => {
-                let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
-                this.sseStatus = res.ok ? '— concluído ✓' : '— com falha ✕';
-                this.sseFechavel = true; this.rodando = false; es.close(); this._es = null;
-                this.carregarHistorico();
+        // Baixa os alvos de UM escopo e junta ao acervo (sem movimentação). Promise<baixou>.
+        _baixarComplEscopo(r, escopo, cpf, alvos) {
+            return new Promise((resolve, reject) => {
+                const delay = Math.max(0, Number(this.tempoEntre) || 0);
+                const bloqueio = Math.max(0, Number(this.esperaBloqueio) || 0);
+                const rot = escopo === 'instituidor' ? 'instituidor' : 'assistido';
+                this.sseTipo = 'download';
+                this.sseStatus = `— baixando (complementar) — ${rot}`;
+                this.sseLog.push({ level: 'novo', msg: `Consultando o SAT para baixar documentos do ${rot}…` });
+                const url = `/api/sat/${encodeURIComponent(r.paj_norm)}/baixar-complementar`
+                    + `?cpf=${encodeURIComponent(cpf)}&nome=${encodeURIComponent(r.assistido || '')}`
+                    + `&delay=${delay}&bloqueio=${bloqueio}&escopo=${escopo}`
+                    + `&alvos=${encodeURIComponent(alvos.join(','))}`;
+                const es = new EventSource(url); this._es = es;
+                es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
+                es.addEventListener('done', (ev) => {
+                    let res = {}; try { res = JSON.parse(ev.data); } catch (e) {}
+                    es.close(); this._es = null;
+                    const baixou = res && Array.isArray(res.salvos) && res.salvos.length;
+                    if (!baixou) { resolve(false); return; }
+                    // move os PDFs para o acervo do escopo (SEM movimentação).
+                    this.sseTipo = 'processar';
+                    this.sseStatus = `— juntando ao acervo (${rot})`;
+                    this.sseLog.push({ level: 'novo', msg: `Juntando os documentos do ${rot} ao acervo (sem anexação)…` });
+                    fetch(`/api/sat/${encodeURIComponent(r.paj_norm)}/mesclar-complementar?escopo=${escopo}`, { method: 'POST' })
+                        .then(x => x.json()).then(j => {
+                            this.sseLog.push({ level: 'ok', msg: `✓ ${(j.movidos || []).length} documento(s) do ${rot} adicionado(s) ao acervo.` });
+                            resolve(true);
+                        }).catch(() => {
+                            this.sseLog.push({ level: 'erro', msg: `Falha ao juntar os documentos do ${rot} ao acervo.` });
+                            resolve(true);
+                        });
+                });
+                es.onerror = () => { es.close(); this._es = null; reject(new Error('erro de conexão')); };
             });
-            es.onerror = () => {
-                this.sseStatus = '— erro de conexão'; this.sseFechavel = true; this.rodando = false;
-                es.close(); this._es = null;
-            };
         },
         abrirTipos() {
             const set = new Set(Object.keys(this.tiposPorPretensao));
@@ -941,7 +1083,9 @@ function satPage() {
             // prazo (sem prazo/dias), tempo entre consultas e espera após bloqueio.
             try {
                 const s = await (await fetch('/api/config/sat-central')).json();
-                if (s.caixa) { this.padrao = s.caixa; this.grupoSel = s.caixa; }
+                if (s.caixa) { this.padrao = s.caixa; }
+                // grupoSel permanece em "Não tramitar" (padrão) — o usuário escolhe
+                // tramitar explicitamente, clicando na caixa desejada.
                 this.comPrazo = (s.prazo_modo === 'dias');
                 if (s.prazo_dias) this.prazoDias = s.prazo_dias;
                 if (typeof s.tempo_entre === 'number') this.tempoEntre = s.tempo_entre;
@@ -1055,24 +1199,27 @@ function satPage() {
             this.narrativaAberta[p.paj_norm] = true;
             await this.carregarNarrativa(p);
         },
-        async excluir(p, nome) {
+        async excluir(p, nome, escopo) {
+            // exclusão DIRETA (sem confirmação): é soft-delete → há botão "Recuperar"
             try {
                 const j = await (await fetch(`/api/sat/${encodeURIComponent(p.paj_norm)}/excluir-arquivo`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ nome: nome })
+                    body: JSON.stringify({ nome: nome, escopo: escopo || 'assistido' })
                 })).json();
                 await this.carregarArquivos(p);
                 if (typeof j.n_arquivos === 'number') p.n_arquivos = j.n_arquivos;
+                if (typeof j.n_instituidor === 'number') p.n_instituidor = j.n_instituidor;
             } catch (e) {}
         },
-        async recuperar(p, nome) {
+        async recuperar(p, nome, escopo) {
             try {
                 const j = await (await fetch(`/api/sat/${encodeURIComponent(p.paj_norm)}/recuperar-arquivo`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ nome: nome })
+                    body: JSON.stringify({ nome: nome, escopo: escopo || 'assistido' })
                 })).json();
                 await this.carregarArquivos(p);
                 if (typeof j.n_arquivos === 'number') p.n_arquivos = j.n_arquivos;
+                if (typeof j.n_instituidor === 'number') p.n_instituidor = j.n_instituidor;
             } catch (e) {}
         },
         baixar(p) {

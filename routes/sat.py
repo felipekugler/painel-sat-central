@@ -6,9 +6,12 @@
 - POST /api/sat/pendentes/manual/del — remove um PAJ manual da lista.
 - GET  /api/sat/pendentes/manuais    — lista os PAJs cadastrados (única fonte —
                                        este painel não varre a caixa de entrada).
-- GET  /api/sat/{paj_norm}/processar — SSE: movimenta → tramita (query `grupo`,
-                                       `prazo`, `dry`). Sem conclusão — o PAJ é
-                                       manual, não há trâmite originário na caixa.
+- GET  /api/sat/{paj_norm}/processar — SSE: movimenta (assistido+instituidor juntos)
+                                       → tramita (query `grupo`, `prazo`, `dry`). Sem
+                                       conclusão — o PAJ é manual, não há trâmite
+                                       originário na caixa.
+- GET  /api/sat/{paj_norm}/anexar-mais — SSE: anexação complementar (nova movimentação
+                                       só de juntada) num PAJ já processado.
 - GET  /api/sat/historico            — registros dos PAJs já trabalhados.
 - GET  /api/sat/grupos               — caixas de grupo da unidade.
 """
@@ -158,7 +161,8 @@ async def _stream_baixar(paj_norm: str, cpf: str, nome: str, delay: float,
 async def api_arquivos(paj_norm: str):
     arqs = sat_service.listar_todos_arquivos_sat(paj_norm)
     return JSONResponse({"arquivos": [
-        {"nome": a["nome"], "tamanho": a.get("tamanho", 0), "excluido": a.get("excluido", False)}
+        {"nome": a["nome"], "tamanho": a.get("tamanho", 0), "excluido": a.get("excluido", False),
+         "escopo": a.get("escopo", "assistido"), "referencia": a.get("referencia", "")}
         for a in arqs]})
 
 
@@ -167,8 +171,11 @@ async def abrir_arquivo(paj_norm: str, nome: str):
     """Serve um PDF do SAT (ativo ou na lixeira 'Excluídos') INLINE, para abrir em nova
     aba do navegador. `nome` é o nome do arquivo (basename; sem travessia de caminho)."""
     base = Path(nome).name  # anti path-traversal
+    # procura nas 4 pastas: assistido (principal + Excluídos) e instituidor (+ Excluídos)
     for pasta in (sat_service.pasta_arquivos_sat(paj_norm),
-                  sat_service.pasta_excluidos(paj_norm)):
+                  sat_service.pasta_instituidor(paj_norm),
+                  sat_service.pasta_excluidos(paj_norm),
+                  sat_service.pasta_excluidos_instituidor(paj_norm)):
         p = pasta / base
         if p.exists() and p.is_file():
             return FileResponse(
@@ -179,16 +186,18 @@ async def abrir_arquivo(paj_norm: str, nome: str):
 
 @router.post("/api/sat/{paj_norm}/excluir-arquivo", response_class=JSONResponse)
 async def api_excluir_arquivo(paj_norm: str, request: Request):
-    """Move o documento para 'Excluídos' (soft delete)."""
+    """Move o documento para 'Excluídos' (soft delete). `escopo` = assistido|instituidor."""
     body = await request.json()
-    return JSONResponse(sat_service.excluir_arquivo_sat(paj_norm, body.get("nome", "")))
+    return JSONResponse(sat_service.excluir_arquivo_sat(
+        paj_norm, body.get("nome", ""), body.get("escopo", "assistido")))
 
 
 @router.post("/api/sat/{paj_norm}/recuperar-arquivo", response_class=JSONResponse)
 async def api_recuperar_arquivo(paj_norm: str, request: Request):
-    """Traz o documento de volta de 'Excluídos' para a lista de anexação."""
+    """Traz o documento de volta de 'Excluídos' para a lista. `escopo` = assistido|instituidor."""
     body = await request.json()
-    return JSONResponse(sat_service.recuperar_arquivo_sat(paj_norm, body.get("nome", "")))
+    return JSONResponse(sat_service.recuperar_arquivo_sat(
+        paj_norm, body.get("nome", ""), body.get("escopo", "assistido")))
 
 
 @router.get("/api/sat/{paj_norm}/narrativa", response_class=JSONResponse)
@@ -204,6 +213,11 @@ async def api_inventario(paj_norm: str):
     from ingestao import sat_client
     inv = sat_service.inventario_paj(paj_norm)
     inv["tipos"] = sat_client.TIPOS_DOCUMENTOS
+    # havendo instituidor, oferece também o inventário dele (mesmo catálogo de tipos) para
+    # que o modal "Baixar mais" permita baixar documentos complementares do instituidor.
+    if sat_service.tem_instituidor(paj_norm):
+        inv_i = sat_service.inventario_paj(paj_norm, escopo="instituidor")
+        inv["instituidor"] = {"itens": inv_i.get("itens", []), "cpf": inv_i.get("cpf", "")}
     return JSONResponse(inv)
 
 
@@ -308,37 +322,23 @@ async def processar(paj_norm: str, grupo: str = "", dry: int = 0, prazo: int = 0
     return EventSourceResponse(_stream_processar(paj_norm, grupo, bool(dry), int(prazo)))
 
 
-async def _stream_anexar_instituidor(paj_norm: str, id_processo: str, assistido: str):
-    async for ev in sat_service.processar_instituidor_stream(paj_norm, id_processo, assistido):
-        if ev.get("done"):
-            yield {"event": "done", "data": json.dumps(ev.get("resultado", {}), ensure_ascii=False)}
-        else:
-            yield {"event": "log", "data": json.dumps(ev, ensure_ascii=False)}
-
-
-@router.get("/api/sat/{paj_norm}/anexar-instituidor")
-async def anexar_instituidor(paj_norm: str, id: str = "", assistido: str = ""):
-    """SSE da anexação (SÓ movimentação) dos documentos do INSTITUIDOR ao PAJ. `id` =
-    id_processo; não tramita nem conclui (registro separado no histórico)."""
-    return EventSourceResponse(_stream_anexar_instituidor(paj_norm, id, assistido))
-
-
 async def _stream_baixar_complementar(paj_norm: str, cpf: str, nome: str, delay: float,
-                                      bloqueio: float, alvos_csv: str):
+                                      bloqueio: float, alvos_csv: str, escopo: str = "assistido"):
     import shutil
     from ingestao import sat_client
-    pasta = sat_service.pasta_complementar(paj_norm)
+    paths = sat_service._escopo_paths(paj_norm, escopo)
+    pasta = paths["complementar"]
     with __import__("contextlib").suppress(Exception):
         shutil.rmtree(pasta, ignore_errors=True)  # isola esta rodada
     alvos = [a for a in (alvos_csv or "").split(",") if a] or None  # "key|sub"
     tipos = sorted({a.split("|", 1)[0] for a in alvos}) if alvos else None
-    # acervo = pasta principal do PAJ: verificação prévia pula o que já foi baixado
-    # (retomada de download interrompido, sem re-baixar os já presentes).
-    acervo = str(sat_service.pasta_arquivos_sat(paj_norm))
+    # acervo = pasta do escopo (principal/instituidor): verificação prévia pula o que já foi
+    # baixado (retomada de download interrompido, sem re-baixar os já presentes).
+    acervo = str(paths["destino"])
     try:
         async for ev in sat_client.baixar_cidadao_stream(
                 cpf, nome, str(pasta), delay_s=delay, bloqueio_s=bloqueio,
-                tipos=tipos, pretensao="", rotulo="", alvos=alvos, pasta_acervo=acervo):
+                tipos=tipos, pretensao="", rotulo=paths["rotulo"], alvos=alvos, pasta_acervo=acervo):
             if ev.get("done"):
                 yield {"event": "done", "data": json.dumps(ev.get("resultado", {}), ensure_ascii=False)}
             else:
@@ -350,34 +350,39 @@ async def _stream_baixar_complementar(paj_norm: str, cpf: str, nome: str, delay:
 
 @router.get("/api/sat/{paj_norm}/baixar-complementar")
 async def baixar_complementar(paj_norm: str, cpf: str, nome: str = "", delay: float = 5.0,
-                              bloqueio: float = 45.0, alvos: str = ""):
+                              bloqueio: float = 45.0, alvos: str = "", escopo: str = "assistido"):
     """SSE do DOWNLOAD COMPLEMENTAR (nova consulta ao SAT no PAJ já concluído). `alvos` =
-    "key|sub" separados por vírgula (subitens escolhidos). Salva na subpasta
-    'Complementar' (limpa antes)."""
-    return EventSourceResponse(_stream_baixar_complementar(paj_norm, cpf, nome, delay, bloqueio, alvos))
+    "key|sub" separados por vírgula (subitens escolhidos). `escopo` = assistido|instituidor
+    (instituidor usa CPF do instituidor, rótulo 'INSTITUIDOR - ' e subpasta 'Instituidor').
+    Salva na subpasta complementar do escopo (limpa antes)."""
+    return EventSourceResponse(
+        _stream_baixar_complementar(paj_norm, cpf, nome, delay, bloqueio, alvos, escopo))
 
 
-async def _stream_anexar_complementar(paj_norm: str, id_processo: str, assistido: str):
-    async for ev in sat_service.processar_complementar_stream(paj_norm, id_processo, assistido):
+async def _stream_anexar_mais(paj_norm: str, rec: str, id_processo: str, assistido: str, nomes_csv: str):
+    # filenames sanitizados não contêm '|' → separador seguro para a lista.
+    nomes = [n for n in (nomes_csv or "").split("|") if n]
+    async for ev in sat_service.anexar_mais_stream(paj_norm, rec, id_processo, assistido, nomes):
         if ev.get("done"):
             yield {"event": "done", "data": json.dumps(ev.get("resultado", {}), ensure_ascii=False)}
         else:
             yield {"event": "log", "data": json.dumps(ev, ensure_ascii=False)}
 
 
-@router.get("/api/sat/{paj_norm}/anexar-complementar")
-async def anexar_complementar(paj_norm: str, id: str = "", assistido: str = ""):
-    """SSE da anexação (SÓ movimentação) do download complementar; move os PDFs para a
-    pasta principal ao final. Registro separado no histórico (escopo='complementar')."""
-    return EventSourceResponse(_stream_anexar_complementar(paj_norm, id, assistido))
+@router.get("/api/sat/{paj_norm}/anexar-mais")
+async def anexar_mais(paj_norm: str, rec: str = "", id: str = "", assistido: str = "", nomes: str = ""):
+    """SSE da ANEXAÇÃO COMPLEMENTAR (nova movimentação só de juntada, sem tramitar/concluir)
+    num PAJ já processado. `rec` = id do registro do histórico a complementar; `nomes` =
+    nomes dos arquivos escolhidos, separados por '|'."""
+    return EventSourceResponse(_stream_anexar_mais(paj_norm, rec, id, assistido, nomes))
 
 
 @router.post("/api/sat/{paj_norm}/mesclar-complementar", response_class=JSONResponse)
-async def mesclar_complementar(paj_norm: str):
+async def mesclar_complementar(paj_norm: str, escopo: str = "assistido"):
     """Download complementar em PAJ pendente (ainda NÃO anexado): move os PDFs para a pasta
-    principal e mescla o log/inventário — SEM movimentação. Os arquivos entram no acervo
-    para a futura 'Anexar ao PAJ'."""
-    return JSONResponse(sat_service.mesclar_complementar_pendente(paj_norm))
+    do escopo (assistido → principal; instituidor → 'Instituidor') e mescla o log/inventário
+    — SEM movimentação. Os arquivos entram no acervo para a futura 'Anexar ao PAJ'."""
+    return JSONResponse(sat_service.mesclar_complementar_pendente(paj_norm, escopo))
 
 
 @router.get("/api/sat/grupos", response_class=JSONResponse)
