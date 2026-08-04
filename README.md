@@ -1,15 +1,6 @@
 # Painel SAT Central
 
-Painel autônomo com a feature **"Arquivos SAT"**: baixa os documentos
-previdenciários de um assistido no SAT Central (INSS/Dataprev) e os anexa a um
-PAJ do SISDPU (movimentação → tramitação).
-
-A única diferença em relação à feature original do PAINEL SISDPU é que os PAJs
-são **incluídos manualmente** (por número — o painel busca os dados no SISDPU
-via busca global) em vez de detectados automaticamente na caixa de entrada.
-Por isso não há **conclusão** de trâmite: como o PAJ não vem de um trâmite da
-caixa, não existe um trâmite originário para concluir — o fluxo termina na
-tramitação.
+Painel para baixar os documentos previdenciários de um assistido e anexa-los a um PAJ do SISDPU (movimentação → tramitação).
 
 ## Como usar
 
