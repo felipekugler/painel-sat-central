@@ -216,6 +216,18 @@ _ALVOS = None
 # afetados. Setado no início de cada download.
 _NB_FILTRO = None
 
+# Filtro inicial por PROTOCOLO (só PAT): set de protocolos (SÓ DÍGITOS) indicado pelo
+# usuário quando já se sabe qual tarefa do PAT interessa. None/vazio = sem filtro (baixa
+# todas as tarefas). Não afeta Grupo 1/Grupo 2 (protocolo é conceito só do PAT). Setado no
+# início de cada download.
+_PROTOCOLO_FILTRO = None
+
+# "Baixar exclusivamente processo administrativo" (opção GLOBAL, qualquer consulta, com ou
+# sem _PROTOCOLO_FILTRO): quando True, pula Grupo 1 e Grupo 2 por completo e vai direto ao
+# PAT — só afeta a mensagem de log (o skip em si já acontece via `tipos=["pat"]"`, que a
+# rota monta quando esta opção é marcada). Setado no início de cada download.
+_SOMENTE_PAT = False
+
 # Compilação de PDFs por tipo (CCON/CRER/Laudo Médico/Laudo Social): quando o nº de docs
 # de um tipo passa de _COMPILAR_LIMIAR, une num único PDF (ordem de NB decrescente) para
 # reduzir os anexos da movimentação. Setado no início de cada download (só o principal).
@@ -982,13 +994,25 @@ async def _pat_stream(page, ctx, nome, pasta_destino, salvos, pulados, reg):
             if _ALVOS is not None and f"pat|{prot}" not in _ALVOS and "pat|" not in _ALVOS:
                 continue
             servico = cells[prot_i + 1] if prot_i + 1 < len(cells) else ""
+            # Filtro inicial por PROTOCOLO (indicado pelo usuário): pula tarefas de
+            # protocolo não indicado — REGISTRA no log. Só se aplica ao PAT.
+            protocolo_indicado = _PROTOCOLO_FILTRO is not None and prot in _PROTOCOLO_FILTRO
+            if _PROTOCOLO_FILTRO is not None and not protocolo_indicado:
+                _inv_add("pat", prot, "", "nao_filtrado_protocolo", rotulo=servico)
+                pulados.append(f"PAT {servico} (protocolo {prot}) — pulado (protocolo não "
+                               f"indicado pelo usuário)")
+                yield reg(f"  – tarefa {prot} ({servico}): pulada — protocolo não indicado "
+                          f"pelo usuário", "muted")
+                continue
             # Verificação prévia: PROCADM deste protocolo já no acervo → pula (retomada).
             if _pat_ja_no_acervo(prot):
                 _inv_add("pat", prot, "", "baixado", rotulo=servico)
                 yield reg(f"  ⏭ tarefa {prot} ({servico}): já baixada — pulando", "muted")
                 continue
-            # Espécies de PAT irrelevantes (lista de ignorados): pula ANTES de baixar.
-            if _pat_ignorado(servico):
+            # Espécies de PAT irrelevantes (lista de ignorados): pula ANTES de baixar. Um
+            # protocolo indicado EXPLICITAMENTE pelo usuário SOBREPÕE a lista de ignorados
+            # (mesmo padrão do NB sobre o filtro por espécie no Grupo 2).
+            if not protocolo_indicado and _pat_ignorado(servico):
                 _inv_add("pat", prot, "", "ignorado", rotulo=servico)
                 pulados.append(f"PAT {servico} (protocolo {prot}) — ignorado (espécie na lista de ignorados)")
                 yield reg(f"  – tarefa {prot} ({servico}): ignorada (espécie de processo "
@@ -1115,7 +1139,7 @@ async def _compilar_por_tipo(pasta_destino, salvos, reg):
 async def baixar_cidadao_stream(cpf: str, nome: str, pasta_destino: str,
                                 delay_s: float = 5.0, bloqueio_s: float = 45.0,
                                 tipos=None, pretensao="", rotulo="", alvos=None,
-                                nbs=None, compilar=False, compilar_limiar=3,
+                                nbs=None, protocolos=None, compilar=False, compilar_limiar=3,
                                 pat_ignorar=None, pasta_acervo=None):
     """Consulta o CPF no SAT (usuário resolve o CAPTCHA na janela) e baixa o Grupo 1
     (1 clique), o Grupo 2 (modais: CCON, CRER, HISCRE, HISCONSIGNADOS, LAUDO MEDICO) e
@@ -1123,19 +1147,24 @@ async def baixar_cidadao_stream(cpf: str, nome: str, pasta_destino: str,
     consultas (padrão 5s; 0 desliga). `bloqueio_s` = espera ao detectar antirobô
     (padrão 45s). `tipos` = coleção de keys de TIPOS_DOCUMENTOS a baixar (None = todos).
     `nbs` = coleção de NBs (qualquer formato) p/ filtrar Grupo 2 + PAT (None/vazio = sem
-    filtro). `compilar`/`compilar_limiar` = compilar por tipo quando > limiar (só no
-    download principal). `pat_ignorar` = espécies de PAT (Serviço) a NÃO baixar.
+    filtro). `protocolos` = coleção de protocolos (qualquer formato) p/ filtrar SÓ o PAT
+    (None/vazio = sem filtro — baixa todas as tarefas). `compilar`/`compilar_limiar` =
+    compilar por tipo quando > limiar (só no download principal). `pat_ignorar` = espécies
+    de PAT (Serviço) a NÃO baixar.
     `pasta_acervo` = pasta do acervo final para VERIFICAÇÃO PRÉVIA (pula docs já presentes;
     permite RETOMAR downloads interrompidos); None = usa `pasta_destino`. O log é gravado
     INCREMENTALMENTE (a cada documento) — uma interrupção deixa o inventário parcial em disco.
     Gera eventos SSE; termina com {'done':True,'resultado':{...}}."""
     global _RITMO_MS, _PAUSA_BLOQUEIO_MS, _ROTULO_ARQ, _INVENTARIO, _ALVOS
-    global _NB_FILTRO, _COMPILAR, _COMPILAR_LIMIAR, _PAT_IGNORAR, _PASTA_ACERVO, _LOG_PERSIST
+    global _NB_FILTRO, _PROTOCOLO_FILTRO, _SOMENTE_PAT, _COMPILAR, _COMPILAR_LIMIAR, _PAT_IGNORAR, _PASTA_ACERVO, _LOG_PERSIST
     _RITMO_MS = max(0, int(float(delay_s) * 1000))
     _PAUSA_BLOQUEIO_MS = max(0, int(float(bloqueio_s) * 1000))
     # filtro de NB: aceita formatado ("726.015.826-4") ou dígitos crus ("7260158264");
     # normaliza para só dígitos. Vazio/None = sem filtro.
     _NB_FILTRO = {re.sub(r"\D", "", str(x)) for x in nbs if re.sub(r"\D", "", str(x))} if nbs else None
+    # filtro de PROTOCOLO (só PAT): mesma normalização (só dígitos). Vazio/None = sem filtro.
+    _PROTOCOLO_FILTRO = ({re.sub(r"\D", "", str(x)) for x in protocolos if re.sub(r"\D", "", str(x))}
+                          if protocolos else None)
     _COMPILAR = bool(compilar)
     _COMPILAR_LIMIAR = max(1, int(compilar_limiar or 3))
     _PAT_IGNORAR = list(pat_ignorar) if pat_ignorar else []  # espécies de PAT a não baixar
@@ -1144,6 +1173,11 @@ async def baixar_cidadao_stream(cpf: str, nome: str, pasta_destino: str,
     _ALVOS = set(alvos) if alvos else None  # subitens específicos (download complementar)
     _PASTA_ACERVO = str(pasta_acervo or pasta_destino)  # verificação prévia (já baixado)
     sel = None if tipos is None else set(tipos)  # None = todos os tipos
+    # "somente PAT": derivado do próprio `sel` resolvido (funciona tanto quando a rota
+    # força tipos=["pat"] pela opção explícita, quanto se um dia uma config de pretensão
+    # resolver para só "pat") — controla só a MENSAGEM de log (o skip do Grupo 1/2 já
+    # acontece via `sel`); o filtro por protocolo continua funcionando dentro do PAT.
+    _SOMENTE_PAT = sel == {"pat"}
     Path(pasta_destino).mkdir(parents=True, exist_ok=True)
     salvos: list[str] = []
     pulados: list[str] = []
@@ -1199,13 +1233,19 @@ async def baixar_cidadao_stream(cpf: str, nome: str, pasta_destino: str,
                    "detalhe": "Não detectei os dados do cidadão (CAPTCHA não resolvido a tempo?)."}}
             return
         await page.wait_for_timeout(800)
-        yield reg("Cidadão localizado. Baixando os documentos (Grupo 1)…", "ok")
+        if _SOMENTE_PAT:
+            yield reg("Cidadão localizado. Opção \"Baixar exclusivamente processo "
+                      "administrativo\" ativa — pulando Grupo 1 e Grupo 2, indo direto ao PAT.",
+                      "ok")
+        else:
+            yield reg("Cidadão localizado. Baixando os documentos (Grupo 1)…", "ok")
 
         # --- Grupo 1 ---
         for label, prefixo, garantido, key in _GRUPO1:
             if sel is not None and key not in sel:
                 _inv_add(key, "", "", "nao_selecionado")
-                yield reg(f"  · {prefixo}: não baixado (desativado para esta pretensão)", "muted")
+                if not _SOMENTE_PAT:
+                    yield reg(f"  · {prefixo}: não baixado (desativado para esta pretensão)", "muted")
                 continue
             # Verificação prévia: já no acervo → pula (retomada sem re-baixar).
             nome_arq_g1 = _final_nome(f"{prefixo} {nome}")

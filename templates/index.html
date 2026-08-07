@@ -190,6 +190,18 @@
                                                x-model="p.nbFiltro">
                                         <span class="text-[11px] nb-filtro-hint">indique um ou mais benefícios, separados por vírgula</span>
                                     </div>
+                                    <div class="protocolo-filtro-box flex items-center gap-2 mb-2 flex-wrap">
+                                        <span class="badge badge-protocolo">Filtrar por Protocolo (PAT)</span>
+                                        <input type="text" class="input input-bordered input-xs w-72"
+                                               placeholder="ex.: 1915479324"
+                                               x-model="p.protocoloFiltro">
+                                        <span class="text-[11px] protocolo-filtro-hint">indique um ou mais protocolos do PAT, separados por vírgula</span>
+                                        <label class="flex items-center gap-1.5 ml-2 cursor-pointer"
+                                               title="Pula o Grupo 1 e o Grupo 2 por completo — baixa só as tarefas do PAT (opcionalmente restritas ao protocolo acima). Funciona com ou sem protocolo indicado.">
+                                            <input type="checkbox" class="checkbox checkbox-xs" x-model="p.somentePat">
+                                            <span class="text-[11px] protocolo-filtro-hint">Baixar exclusivamente processo administrativo (PAT)</span>
+                                        </label>
+                                    </div>
                                     <div class="text-[11px] leading-[1.6] whitespace-pre-wrap max-h-72 overflow-y-auto p-2 rounded bg-base-300">
                                         <span x-show="narrativas[p.paj_norm] === undefined" class="loading loading-spinner loading-xs"></span>
                                         <span x-text="narrativas[p.paj_norm] || ''"></span>
@@ -659,6 +671,20 @@
     padding: 6px 10px;
 }
 .nb-filtro-hint { color: var(--text-tertiary); }
+/* Filtro por Protocolo (só PAT) — mesmo padrão do filtro por NB, tonalidade azulada p/ diferenciar */
+.badge-protocolo {
+    background-color: #d6e4f6 !important;
+    color: #1c4a9b !important;
+    border: 1px solid #a3c0e0 !important;
+    font-weight: 600;
+}
+.protocolo-filtro-box {
+    background: rgba(69, 124, 214, 0.10);
+    border: 1px solid rgba(69, 124, 214, 0.40);
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+.protocolo-filtro-hint { color: var(--text-tertiary); }
 /* Ponto vermelho de falha ao lado do badge de documentos (clicável → abre o log) */
 .sat-falha-dot {
     display: inline-block;
@@ -921,6 +947,7 @@ function satPage() {
                 else if (row.status === 'nao_consultado') m.push('não consultado (indeferido)');
                 else if (row.status === 'pulado_prazo') m.push('pulado - protocolo há mais de 5 anos');
                 else if (row.status === 'nao_filtrado_nb') m.push('pulado - NB não indicado no filtro');
+                else if (row.status === 'nao_filtrado_protocolo') m.push('pulado - protocolo não indicado no filtro');
                 else if (row.status === 'ignorado') m.push('ignorado - espécie na lista de ignorados');
             }
             return m.join(' · ');
@@ -1254,7 +1281,9 @@ function satPage() {
                     + `?cpf=${encodeURIComponent(p.cpf)}&nome=${encodeURIComponent(p.assistido)}`
                     + `&delay=${delay}&bloqueio=${bloqueio}`
                     + `&pretensao=${encodeURIComponent(p.pretensao || '')}`
-                    + `&nbs=${encodeURIComponent(p.nbFiltro || '')}`;
+                    + `&nbs=${encodeURIComponent(p.nbFiltro || '')}`
+                    + `&protocolos=${encodeURIComponent(p.protocoloFiltro || '')}`
+                    + `&somente_pat=${p.somentePat ? 1 : 0}`;
                 const es = new EventSource(url); this._es = es;
                 es.addEventListener('log', (ev) => { try { this.sseLog.push(JSON.parse(ev.data)); } catch (e) {} });
                 es.addEventListener('done', (ev) => {
